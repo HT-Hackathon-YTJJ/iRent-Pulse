@@ -1,42 +1,74 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../data/vehicle.dart';
 import '../design/tokens.dart';
 import '../widgets/dark_sheet.dart';
 import '../widgets/map_backdrop.dart';
-import '../widgets/pill_button.dart';
 import 'vehicle_status_screen.dart';
 
 /// 安心上路輔助 — interactive walkthrough of the car's controls.
 ///
-/// Tapping a numbered marker on the diagram scrolls the list to that control
-/// and vice-versa, so the picture and the explanation always stay in sync.
+/// Presented as a Material draggable sheet over the map: it can be pulled
+/// between 40% and 94% of the screen, snaps to three stops, and can never be
+/// flung away — closing is deliberate, through the ✕ in the header.
 class SafeDriveAssistScreen extends StatefulWidget {
   const SafeDriveAssistScreen({
     super.key,
     required this.vehicle,
     this.initialSectionId,
+    this.replaceWithStatus = false,
   });
 
   final VehicleProfile vehicle;
   final String? initialSectionId;
+
+  /// True when the sheet is the last step of the unlock flow: closing it moves
+  /// on to 車輛資訊 instead of popping back.
+  final bool replaceWithStatus;
 
   @override
   State<SafeDriveAssistScreen> createState() => _SafeDriveAssistScreenState();
 }
 
 class _SafeDriveAssistScreenState extends State<SafeDriveAssistScreen> {
+  static const _minSheet = 0.40;
+  static const _midSheet = 0.72;
+  static const _maxSheet = 0.94;
+  static const _snapSizes = <double>[_minSheet, _midSheet, _maxSheet];
+
+  /// Fixed chrome above the diagram, so the column can never overflow.
+  static const _headerHeight = 74.0;
+  static const _chipsHeight = 48.0;
+  static const _minListHeight = 92.0;
+  static const _minDiagramHeight = 130.0;
+
+  final _sheet = DraggableScrollableController();
+  ScrollController? _scroll;
+
   late String _sectionId =
       widget.initialSectionId ?? widget.vehicle.assistSections.first.id;
   int? _selected;
-  final _listController = ScrollController();
 
   AssistSection get _section => widget.vehicle.sectionById(_sectionId);
 
   @override
   void dispose() {
-    _listController.dispose();
+    _sheet.dispose();
     super.dispose();
+  }
+
+  void _close() {
+    if (widget.replaceWithStatus) {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => VehicleStatusScreen(vehicle: widget.vehicle),
+        ),
+      );
+    } else {
+      Navigator.of(context).maybePop();
+    }
   }
 
   void _selectSection(String id) {
@@ -45,12 +77,14 @@ class _SafeDriveAssistScreenState extends State<SafeDriveAssistScreen> {
       _sectionId = id;
       _selected = null;
     });
-    if (_listController.hasClients) _listController.jumpTo(0);
+    if (_scroll?.hasClients ?? false) _scroll!.jumpTo(0);
+    _expandAtLeast(_midSheet);
   }
 
   void _selectItem(int number) {
     setState(() => _selected = _selected == number ? null : number);
     if (_selected == null) return;
+    _expandAtLeast(_midSheet);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final ctx = _rowKey(number).currentContext;
       if (ctx == null) return;
@@ -65,10 +99,55 @@ class _SafeDriveAssistScreenState extends State<SafeDriveAssistScreen> {
 
   GlobalObjectKey _rowKey(int number) => GlobalObjectKey('$_sectionId-$number');
 
+  // --- sheet dragging -------------------------------------------------------
+
+  void _expandAtLeast(double size) {
+    if (!_sheet.isAttached || _sheet.size >= size - 0.01) return;
+    _sheet.animateTo(
+      size,
+      duration: const Duration(milliseconds: 260),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  /// Lets the whole header act as a drag handle, not just the grabber.
+  void _dragSheet(double deltaY) {
+    if (!_sheet.isAttached) return;
+    final height = MediaQuery.sizeOf(context).height;
+    if (height == 0) return;
+    _sheet.jumpTo((_sheet.size - deltaY / height).clamp(_minSheet, _maxSheet));
+  }
+
+  void _settleSheet(double velocityY) {
+    if (!_sheet.isAttached) return;
+    final current = _sheet.size;
+    final double target;
+    if (velocityY < -320) {
+      target = _snapSizes.firstWhere(
+        (s) => s > current + 0.01,
+        orElse: () => _maxSheet,
+      );
+    } else if (velocityY > 320) {
+      target = _snapSizes.lastWhere(
+        (s) => s < current - 0.01,
+        orElse: () => _minSheet,
+      );
+    } else {
+      target = _snapSizes.reduce(
+        (a, b) => (a - current).abs() <= (b - current).abs() ? a : b,
+      );
+    }
+    _sheet.animateTo(
+      target,
+      duration: const Duration(milliseconds: 240),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  // --- build ----------------------------------------------------------------
+
   @override
   Widget build(BuildContext context) {
-    final topInset = MediaQuery.paddingOf(context).top;
-
     return Scaffold(
       backgroundColor: Colors.white,
       body: SizedBox.expand(
@@ -79,28 +158,21 @@ class _SafeDriveAssistScreenState extends State<SafeDriveAssistScreen> {
                 center: DemoPlace.chengKung,
                 zoom: 15.4,
                 interactive: false,
-                showUserDot: false,
+                // Keep the basemap attribution clear of the collapsed sheet.
+                bottomPadding: MediaQuery.sizeOf(context).height * _minSheet,
               ),
             ),
-            Positioned.fill(
-              top: topInset + 96,
-              child: Column(
-                children: [
-                  _header(),
-                  Expanded(
-                    child: Container(
-                      color: Colors.white,
-                      child: Column(
-                        children: [
-                          _chipRow(),
-                          Expanded(child: _body()),
-                          _footer(),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+            DraggableScrollableSheet(
+              controller: _sheet,
+              initialChildSize: _midSheet,
+              minChildSize: _minSheet,
+              maxChildSize: _maxSheet,
+              snap: true,
+              snapSizes: _snapSizes,
+              builder: (context, scrollController) {
+                _scroll = scrollController;
+                return _sheetBody(scrollController);
+              },
             ),
           ],
         ),
@@ -108,34 +180,185 @@ class _SafeDriveAssistScreenState extends State<SafeDriveAssistScreen> {
     );
   }
 
-  Widget _header() {
-    return DarkSheetSurface(
-      topPadding: 10,
-      child: DarkSheetHeader(
-        title: '安心上路輔助',
-        subtitle: '自由點選想了解的車內設備',
-        padding: const EdgeInsets.fromLTRB(24, 0, 16, 20),
-        trailing: IconButton(
-          onPressed: () => Navigator.of(context).maybePop(),
-          icon: const Icon(
-            Icons.close_rounded,
-            color: Colors.white70,
-            size: 24,
-          ),
-          tooltip: '關閉',
+  Widget _sheetBody(ScrollController scrollController) {
+    final section = _section;
+    final bottomInset = MediaQuery.paddingOf(context).bottom;
+
+    return DecoratedBox(
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(
+          top: Radius.circular(AppRadius.sheet),
         ),
+        boxShadow: AppShadow.bottomBar,
+      ),
+      child: ClipRRect(
+        borderRadius: const BorderRadius.vertical(
+          top: Radius.circular(AppRadius.sheet),
+        ),
+        child: LayoutBuilder(
+          builder: (context, c) {
+            // The diagram absorbs whatever height is left once the header, the
+            // chips and one list row are accounted for. Collapsed all the way
+            // down there is no room for it, so it steps aside and the sheet
+            // reads as title + tabs + text.
+            final free = c.maxHeight - _headerHeight - _chipsHeight;
+            final diagramHeight = (free - _minListHeight).clamp(
+              0.0,
+              math.min(c.maxHeight * 0.44, 268.0),
+            );
+            final showDiagram = diagramHeight >= _minDiagramHeight;
+
+            return Column(
+              children: [
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onVerticalDragUpdate: (d) => _dragSheet(d.primaryDelta ?? 0),
+                  onVerticalDragEnd: (d) =>
+                      _settleSheet(d.velocity.pixelsPerSecond.dy),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _header(),
+                      ColoredBox(
+                        color: Colors.white,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            _chipRow(),
+                            if (showDiagram)
+                              SizedBox(
+                                height: diagramHeight + 14,
+                                child: Padding(
+                                  padding: const EdgeInsets.fromLTRB(
+                                    15,
+                                    0,
+                                    15,
+                                    14,
+                                  ),
+                                  child: _DiagramCard(
+                                    section: section,
+                                    selected: _selected,
+                                    onSelectItem: _selectItem,
+                                    onSelectSection: _selectSection,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: ColoredBox(
+                    color: Colors.white,
+                    child: section.isOverview
+                        ? ListView(
+                            controller: scrollController,
+                            padding: EdgeInsets.fromLTRB(
+                              15,
+                              showDiagram ? 0 : 6,
+                              15,
+                              20 + bottomInset,
+                            ),
+                            children: [_overviewHint()],
+                          )
+                        : ListView.separated(
+                            controller: scrollController,
+                            padding: EdgeInsets.fromLTRB(
+                              15,
+                              showDiagram ? 0 : 6,
+                              15,
+                              20 + bottomInset,
+                            ),
+                            itemCount: section.items.length,
+                            separatorBuilder: (_, _) =>
+                                const SizedBox(height: 8),
+                            itemBuilder: (context, i) {
+                              final item = section.items[i];
+                              return _ItemRow(
+                                key: _rowKey(item.number),
+                                item: item,
+                                selected: _selected == item.number,
+                                onTap: () => _selectItem(item.number),
+                              );
+                            },
+                          ),
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _header() {
+    return Container(
+      height: _headerHeight,
+      decoration: const BoxDecoration(
+        color: AppColor.sheetDark,
+        borderRadius: BorderRadius.vertical(
+          top: Radius.circular(AppRadius.sheet),
+        ),
+      ),
+      child: Column(
+        children: [
+          const Padding(
+            padding: EdgeInsets.only(top: 10, bottom: 12),
+            child: SheetGrabber(),
+          ),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 10, 8),
+              child: Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      '安心上路輔助',
+                      style: TextStyle(
+                        fontSize: 20,
+                        height: 1.2,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                  SizedBox(
+                    width: 34,
+                    height: 34,
+                    child: IconButton(
+                      onPressed: _close,
+                      padding: EdgeInsets.zero,
+                      visualDensity: VisualDensity.compact,
+                      splashRadius: 20,
+                      icon: const Icon(
+                        Icons.close_rounded,
+                        color: Colors.white70,
+                        size: 22,
+                      ),
+                      tooltip: '關閉安心上路輔助',
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
 
   Widget _chipRow() {
     return SizedBox(
-      height: 54,
+      height: _chipsHeight,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
+        padding: const EdgeInsets.fromLTRB(15, 10, 15, 10),
         itemCount: widget.vehicle.assistSections.length,
-        separatorBuilder: (_, _) => const SizedBox(width: 8),
+        separatorBuilder: (_, _) => const SizedBox(width: 7),
         itemBuilder: (context, i) {
           final s = widget.vehicle.assistSections[i];
           final active = s.id == _sectionId;
@@ -144,7 +367,7 @@ class _SafeDriveAssistScreenState extends State<SafeDriveAssistScreen> {
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 180),
               curve: Curves.easeOut,
-              padding: const EdgeInsets.symmetric(horizontal: 14),
+              padding: const EdgeInsets.symmetric(horizontal: 12),
               alignment: Alignment.center,
               decoration: BoxDecoration(
                 color: active ? AppColor.brandSoft : Colors.white,
@@ -159,10 +382,11 @@ class _SafeDriveAssistScreenState extends State<SafeDriveAssistScreen> {
               child: Text(
                 s.label,
                 style: TextStyle(
-                  fontSize: 13.5,
+                  fontSize: 12.5,
+                  height: 1.2,
                   fontWeight: active ? FontWeight.w700 : FontWeight.w500,
                   color: active ? AppColor.brand : AppColor.textPrimary,
-                  letterSpacing: 0.4,
+                  letterSpacing: 0.3,
                 ),
               ),
             ),
@@ -172,118 +396,41 @@ class _SafeDriveAssistScreenState extends State<SafeDriveAssistScreen> {
     );
   }
 
-  Widget _body() {
-    final section = _section;
-    return LayoutBuilder(
-      builder: (context, c) {
-        // Keep the diagram pinned above the list so the picture and the
-        // explanation stay on screen together, and cap it on short displays.
-        final diagramMax = (c.maxHeight * 0.46).clamp(150.0, 300.0);
-        return Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(15, 4, 15, 12),
-              child: ConstrainedBox(
-                constraints: BoxConstraints(maxHeight: diagramMax),
-                child: _DiagramCard(
-                  section: section,
-                  selected: _selected,
-                  onSelectItem: _selectItem,
-                  onSelectSection: _selectSection,
-                ),
-              ),
-            ),
-            Expanded(
-              child: section.isOverview
-                  ? SingleChildScrollView(child: _overviewHint())
-                  : ListView.separated(
-                      controller: _listController,
-                      padding: const EdgeInsets.fromLTRB(15, 0, 15, 18),
-                      itemCount: section.items.length,
-                      separatorBuilder: (_, _) => const SizedBox(height: 8),
-                      itemBuilder: (context, i) {
-                        final item = section.items[i];
-                        return _ItemRow(
-                          key: _rowKey(item.number),
-                          item: item,
-                          selected: _selected == item.number,
-                          onTap: () => _selectItem(item.number),
-                        );
-                      },
-                    ),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
   Widget _overviewHint() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(15, 4, 15, 24),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        decoration: BoxDecoration(
-          color: AppColor.subtle,
-          borderRadius: BorderRadius.circular(AppRadius.card),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 34,
-              height: 34,
-              alignment: Alignment.center,
-              decoration: const BoxDecoration(
-                color: AppColor.brandSoft,
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(
-                Icons.touch_app_rounded,
-                size: 19,
-                color: AppColor.brand,
-              ),
-            ),
-            const SizedBox(width: 12),
-            const Expanded(
-              child: Text(
-                '點選圖上的標籤，查看該區域的完整操作說明。',
-                style: TextStyle(
-                  fontSize: 13.5,
-                  height: 1.5,
-                  color: AppColor.textMuted,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _footer() {
     return Container(
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        boxShadow: AppShadow.bottomBar,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+      decoration: BoxDecoration(
+        color: AppColor.subtle,
+        borderRadius: BorderRadius.circular(AppRadius.card),
       ),
-      padding: EdgeInsets.fromLTRB(
-        16,
-        14,
-        16,
-        14 + MediaQuery.paddingOf(context).bottom,
-      ),
-      child: PillButton(
-        label: '關閉安心上路輔助',
-        outlined: true,
-        textStyle: AppText.bodyM.copyWith(
-          fontSize: 16,
-          fontWeight: FontWeight.w500,
-        ),
-        onPressed: () => Navigator.of(context).pushReplacement(
-          MaterialPageRoute(
-            builder: (_) => VehicleStatusScreen(vehicle: widget.vehicle),
+      child: Row(
+        children: [
+          Container(
+            width: 30,
+            height: 30,
+            alignment: Alignment.center,
+            decoration: const BoxDecoration(
+              color: AppColor.brandSoft,
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(
+              Icons.touch_app_rounded,
+              size: 17,
+              color: AppColor.brand,
+            ),
           ),
-        ),
+          const SizedBox(width: 11),
+          const Expanded(
+            child: Text(
+              '點選圖上的標籤，查看該區域的完整操作說明。',
+              style: TextStyle(
+                fontSize: 12.5,
+                height: 1.5,
+                color: AppColor.textMuted,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -471,8 +618,8 @@ class _NumberMarker extends StatelessWidget {
       behavior: HitTestBehavior.opaque,
       onTap: onTap,
       child: SizedBox(
-        width: 34,
-        height: 34,
+        width: 32,
+        height: 32,
         child: Center(
           child: Stack(
             alignment: Alignment.center,
@@ -482,8 +629,8 @@ class _NumberMarker extends StatelessWidget {
               AnimatedContainer(
                 duration: const Duration(milliseconds: 200),
                 curve: Curves.easeOutBack,
-                width: active ? 25 : 19,
-                height: active ? 25 : 19,
+                width: active ? 24 : 18,
+                height: active ? 24 : 18,
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
                   color: active
@@ -494,7 +641,7 @@ class _NumberMarker extends StatelessWidget {
                   shape: BoxShape.circle,
                   border: Border.all(
                     color: Colors.white,
-                    width: active ? 2.4 : 1.6,
+                    width: active ? 2.2 : 1.5,
                   ),
                   boxShadow: const [
                     BoxShadow(
@@ -553,8 +700,8 @@ class _HaloState extends State<_Halo> with SingleTickerProviderStateMixin {
       builder: (context, _) {
         final t = _c.value;
         return Container(
-          width: 24 + 20 * t,
-          height: 24 + 20 * t,
+          width: 23 + 19 * t,
+          height: 23 + 19 * t,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             border: Border.all(
@@ -579,7 +726,7 @@ class _HotspotPill extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3.5),
         decoration: BoxDecoration(
           color: AppColor.brandBright,
           borderRadius: BorderRadius.circular(AppRadius.pill),
@@ -597,15 +744,15 @@ class _HotspotPill extends StatelessWidget {
             Text(
               label,
               style: const TextStyle(
-                fontSize: 11,
+                fontSize: 10.5,
                 height: 1.2,
                 fontWeight: FontWeight.w700,
                 color: Colors.white,
-                letterSpacing: 0.4,
+                letterSpacing: 0.3,
               ),
             ),
-            const SizedBox(width: 3),
-            const Icon(Icons.chevron_right, size: 13, color: Colors.white),
+            const SizedBox(width: 2),
+            const Icon(Icons.chevron_right, size: 12, color: Colors.white),
           ],
         ),
       ),
@@ -636,7 +783,7 @@ class _ItemRow extends StatelessWidget {
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
         curve: Curves.easeOut,
-        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+        padding: const EdgeInsets.fromLTRB(13, 11, 13, 11),
         decoration: BoxDecoration(
           color: selected ? AppColor.brandSoft : AppColor.subtle,
           borderRadius: BorderRadius.circular(AppRadius.checklist),
@@ -650,8 +797,8 @@ class _ItemRow extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Container(
-              width: 22,
-              height: 22,
+              width: 20,
+              height: 20,
               alignment: Alignment.center,
               margin: const EdgeInsets.only(top: 1),
               decoration: BoxDecoration(
@@ -673,7 +820,7 @@ class _ItemRow extends StatelessWidget {
                 ),
               ),
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: 11),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -681,18 +828,18 @@ class _ItemRow extends StatelessWidget {
                   Text(
                     item.title,
                     style: const TextStyle(
-                      fontSize: 14.5,
+                      fontSize: 13.5,
                       height: 1.35,
                       fontWeight: FontWeight.w700,
                       color: AppColor.textInk,
                     ),
                   ),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 3),
                   Text(
                     item.description,
                     style: const TextStyle(
-                      fontSize: 12.5,
-                      height: 1.55,
+                      fontSize: 12,
+                      height: 1.5,
                       color: AppColor.textMuted,
                     ),
                   ),

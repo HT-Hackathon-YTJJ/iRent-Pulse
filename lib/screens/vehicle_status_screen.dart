@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../data/vehicle.dart';
 import '../design/tokens.dart';
+import '../widgets/back_button.dart';
+import '../widgets/bottom_action_bar.dart';
 import '../widgets/pill_button.dart';
 import '../widgets/vehicle_header.dart';
 import 'return_checklist_dialog.dart';
@@ -113,6 +115,12 @@ class _VehicleStatusScreenState extends State<VehicleStatusScreen> {
             child: VehicleHeaderPanel(
               vehicle: widget.vehicle,
               showGrabber: false,
+              leading: AppBackButton(
+                onTap: () => Navigator.of(context).popUntil((r) => r.isFirst),
+                filled: false,
+                color: Colors.white,
+                tooltip: '返回地圖',
+              ),
               trailing: _StageMenu(
                 stage: _stage,
                 onChanged: (s) => setState(() => _stage = s),
@@ -169,16 +177,15 @@ class _VehicleStatusScreenState extends State<VehicleStatusScreen> {
               ],
             ),
           ),
-          Container(
-            decoration: const BoxDecoration(
-              color: Colors.white,
-              boxShadow: AppShadow.bottomBar,
-            ),
-            padding: EdgeInsets.fromLTRB(
+          // Page-coloured rather than white: over the grey list a white slab
+          // read as a separate panel instead of a footer.
+          BottomActionBar(
+            background: AppColor.page,
+            padding: const EdgeInsets.fromLTRB(
               16,
               16,
               16,
-              16 + MediaQuery.paddingOf(context).bottom,
+              BottomActionBar.minBottomGap,
             ),
             child: PillButton(label: '還車', onPressed: _return),
           ),
@@ -254,7 +261,7 @@ class _FuelCard extends StatelessWidget {
             children: [
               const Icon(
                 Icons.local_gas_station,
-                size: 20,
+                size: 19,
                 color: AppColor.textPrimary,
               ),
               const SizedBox(width: 9),
@@ -263,7 +270,7 @@ class _FuelCard extends StatelessWidget {
                 child: Text(
                   '當前油量',
                   style: TextStyle(
-                    fontSize: 18,
+                    fontSize: 16.5,
                     fontWeight: FontWeight.w700,
                     color: AppColor.textPrimary,
                   ),
@@ -277,7 +284,7 @@ class _FuelCard extends StatelessWidget {
                 builder: (context, v, _) => Text(
                   '${v.round()}%',
                   style: TextStyle(
-                    fontSize: 46,
+                    fontSize: 40,
                     height: 1,
                     fontWeight: FontWeight.w700,
                     color: accent,
@@ -300,7 +307,7 @@ class _FuelCard extends StatelessWidget {
             child: Text(
               '預估可行駛里程 $rangeKm km',
               style: TextStyle(
-                fontSize: 15.5,
+                fontSize: 14,
                 fontWeight: FontWeight.w500,
                 color: accent,
               ),
@@ -310,7 +317,7 @@ class _FuelCard extends StatelessWidget {
           const Center(
             child: Text(
               '實際續航里程將依路況及駕駛方式變動',
-              style: TextStyle(fontSize: 12, color: AppColor.textSecondary),
+              style: TextStyle(fontSize: 11, color: AppColor.textSecondary),
             ),
           ),
         ],
@@ -413,15 +420,15 @@ class _MetricCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return _Card(
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
       child: Row(
         children: [
-          Icon(icon, size: 23, color: AppColor.textPrimary),
+          Icon(icon, size: 21, color: AppColor.textPrimary),
           const SizedBox(width: 11),
           Text(
             label,
             style: const TextStyle(
-              fontSize: 17,
+              fontSize: 15.5,
               fontWeight: FontWeight.w700,
               color: AppColor.textPrimary,
             ),
@@ -431,7 +438,7 @@ class _MetricCard extends StatelessWidget {
             Text(
               value,
               style: const TextStyle(
-                fontSize: 30,
+                fontSize: 26,
                 height: 1.1,
                 fontWeight: FontWeight.w700,
                 color: AppColor.warning,
@@ -443,7 +450,7 @@ class _MetricCard extends StatelessWidget {
               child: Text(
                 unit,
                 style: const TextStyle(
-                  fontSize: 16,
+                  fontSize: 14.5,
                   fontWeight: FontWeight.w700,
                   color: AppColor.textPrimary,
                 ),
@@ -458,7 +465,7 @@ class _MetricCard extends StatelessWidget {
 }
 
 class _Card extends StatelessWidget {
-  const _Card({required this.child, this.padding = const EdgeInsets.all(18)});
+  const _Card({required this.child, this.padding = const EdgeInsets.all(16)});
 
   final Widget child;
   final EdgeInsets padding;
@@ -535,7 +542,7 @@ class _Banner extends StatelessWidget {
               if (onTap != null)
                 Icon(
                   Icons.chevron_right,
-                  size: 30,
+                  size: 26,
                   color: color.withValues(alpha: 0.8),
                 ),
             ],
@@ -568,8 +575,8 @@ class _AssistShortcut extends StatelessWidget {
           child: Row(
             children: [
               Container(
-                width: 38,
-                height: 38,
+                width: 34,
+                height: 34,
                 alignment: Alignment.center,
                 decoration: const BoxDecoration(
                   color: AppColor.brandSoft,
@@ -577,7 +584,7 @@ class _AssistShortcut extends StatelessWidget {
                 ),
                 child: const Icon(
                   Icons.verified_user_rounded,
-                  size: 21,
+                  size: 19,
                   color: AppColor.brand,
                 ),
               ),
@@ -589,7 +596,7 @@ class _AssistShortcut extends StatelessWidget {
                     Text(
                       '安心上路輔助',
                       style: TextStyle(
-                        fontSize: 15.5,
+                        fontSize: 14.5,
                         fontWeight: FontWeight.w700,
                         color: AppColor.textPrimary,
                       ),
@@ -598,7 +605,7 @@ class _AssistShortcut extends StatelessWidget {
                     Text(
                       '隨時查看本車儀表板與各項操作說明',
                       style: TextStyle(
-                        fontSize: 12.5,
+                        fontSize: 11.5,
                         color: AppColor.textSecondary,
                       ),
                     ),

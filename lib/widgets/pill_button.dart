@@ -73,17 +73,6 @@ class _PillButtonState extends State<PillButton> {
                         width: 1.8,
                       )
                     : null,
-                boxShadow: widget.outlined || !enabled
-                    ? null
-                    : [
-                        BoxShadow(
-                          color: widget.color.withValues(
-                            alpha: _down ? 0.16 : 0.30,
-                          ),
-                          blurRadius: _down ? 8 : 16,
-                          offset: Offset(0, _down ? 2 : 6),
-                        ),
-                      ],
               ),
               alignment: Alignment.center,
               child: Row(

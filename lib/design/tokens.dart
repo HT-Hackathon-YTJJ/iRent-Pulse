@@ -18,12 +18,18 @@ class AppColor {
   static const page = Color(0xFFF5F5F5);
   static const subtle = Color(0xFFF5F5F7);
   static const sheetDark = Color(0xFF4A4A4A);
+
+  /// Panel sitting on top of [sheetDark]. Figma uses #8C8C8C, which leaves the
+  /// 11px labels under 3:1 against white; this is the same grey family two
+  /// steps down so the small type clears AA.
+  static const sheetPanel = Color(0xFF6E6E6E);
   static const sheetDarkDeep = Color(0xFF3C3C3C);
 
   // Text
   static const textPrimary = Color(0xFF262626);
   static const textInk = Color(0xFF1F1F24);
   static const textSecondary = Color(0xFF8C8C8C);
+  static const textPlaceholder = Color(0xFFA6A6A6);
   static const textMuted = Color(0xFF73737A);
   static const textOnDark = Color(0xFFB3B3B3);
   static const textInverse = Color(0xFFFFFFFF);

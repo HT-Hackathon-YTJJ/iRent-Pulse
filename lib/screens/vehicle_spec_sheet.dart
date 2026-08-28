@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../data/vehicle.dart';
 import '../design/tokens.dart';
+import '../widgets/bottom_action_bar.dart';
 import '../widgets/dark_sheet.dart';
 import '../widgets/pill_button.dart';
 
@@ -98,10 +99,10 @@ class _VehicleSpecSheet extends StatelessWidget {
                       ),
                     ),
                     Padding(
-                      padding: const EdgeInsets.only(top: 4),
+                      padding: const EdgeInsets.only(top: 2),
                       child: Image.asset(
                         vehicle.sideImage,
-                        width: 200,
+                        width: 206,
                         fit: BoxFit.contain,
                       ),
                     ),
@@ -112,15 +113,9 @@ class _VehicleSpecSheet extends StatelessWidget {
             ],
           ),
         ),
-        Container(
-          width: double.infinity,
-          color: Colors.white,
-          padding: EdgeInsets.fromLTRB(
-            20,
-            22,
-            20,
-            20 + MediaQuery.paddingOf(context).bottom,
-          ),
+        BottomActionBar(
+          shadow: false,
+          padding: const EdgeInsets.fromLTRB(20, 22, 20, 20),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [

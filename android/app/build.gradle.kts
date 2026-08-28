@@ -4,6 +4,18 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+// Google Maps 金鑰從專案根目錄的 .env 讀進來（.env 不進版控）。
+// 沒有 .env 或沒有這個 key 時是空字串，App 會自動退回 OpenStreetMap 底圖。
+val mapsApiKey: String = rootProject.file("../.env").let { envFile ->
+    if (!envFile.exists()) return@let ""
+    envFile.readLines()
+        .firstOrNull { it.trimStart().startsWith("GOOGLE_MAPS_API_KEY=") }
+        ?.substringAfter("=")
+        ?.trim()
+        ?.trim('"', '\'')
+        ?: ""
+}
+
 android {
     namespace = "com.irentpulse.irent_pulse"
     compileSdk = flutter.compileSdkVersion
@@ -27,6 +39,8 @@ android {
         // flag during build.
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+
+        manifestPlaceholders["MAPS_API_KEY"] = mapsApiKey
     }
 
     buildTypes {

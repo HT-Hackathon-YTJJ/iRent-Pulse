@@ -29,7 +29,7 @@ flutter run -d chrome
 
 | 畫面 | 檔案 |
 |---|---|
-| 地圖首頁（同站租還／路邊租還、站點 Pin、立即預約／一鍵尋車、情報列） | `lib/screens/home_map_screen.dart` |
+| 地圖首頁（同站租還／路邊租還、站點 Pin、立即預約／一鍵尋車） | `lib/screens/home_map_screen.dart` |
 | 側邊選單（會員、錢包、優惠、回饋計畫） | `lib/screens/side_menu.dart` |
 | 取車地圖 + 車輛卡片（開鎖） | `lib/screens/trip_screen.dart` |
 
@@ -57,7 +57,7 @@ flutter run -d chrome
 | 車輛規格表 | `lib/screens/vehicle_spec_sheet.dart` |
 | 如何啟動這輛車 | `lib/screens/start_vehicle_sheet.dart` |
 | 是否啟用輔助 | `lib/screens/assist_prompt_dialog.dart` |
-| 安心上路輔助（五個分頁 + 互動標記） | `lib/screens/safe_drive_assist_screen.dart` |
+| 安心上路輔助 Bottom Sheet（五個分頁 + 互動標記） | `lib/screens/safe_drive_assist_screen.dart` |
 | 車輛資訊（三種情境） | `lib/screens/vehicle_status_screen.dart` |
 | 下車前確認清單 | `lib/screens/return_checklist_dialog.dart` |
 
@@ -73,6 +73,7 @@ flutter run -d chrome
 lib/
 ├─ design/tokens.dart          # 色彩／圓角／陰影／字級 semantic token
 ├─ data/vehicle.dart           # 車款資料：規格、啟動步驟、五個分區的圖說內容與標記座標
+├─ config/                     # 地圖金鑰開關與 Web 版 Maps JS 動態載入
 ├─ widgets/                    # PillButton、深色 Sheet、車輛標頭、地圖底圖與 Pin
 └─ screens/                    # 上表所有畫面
 ```
@@ -86,11 +87,65 @@ lib/
 
 ---
 
+## 安心上路輔助的 Bottom Sheet
+
+用 `DraggableScrollableSheet`（Flutter 內建，不需要額外套件）疊在地圖上：
+
+* 三段吸附點：**40% / 72% / 94%**，放手會自動吸到最近的一段。
+* 最低只能拉到 40%，**拖不下去也關不掉**——避免行駛中誤觸關閉。關閉一律走右上角的 ✕。
+* 拉到 40% 時圖說收起來，只留標題、分頁與說明列表；拉開後圖說自動回來並吃掉多出來的高度。
+* 整個標題區都是拖曳把手（`_dragSheet` / `_settleSheet` 直接驅動 `DraggableScrollableController`），不是只有中間那條灰線；列表捲到頂端再往下拉也會收合 Sheet，符合 Material 的操作邏輯。
+* 點圖上的紅色編號或下方清單時，Sheet 會自動至少展開到 72%，再把該項捲到視野內。
+
+---
+
 ## 地圖
 
-目前用 `flutter_map` + OpenStreetMap 圖磚，套一層色彩矩陣把它調成接近 Google Maps 的淺灰底。**不需要 API key**，適合現在這個階段。
+`lib/widgets/map_backdrop.dart` 內建兩套底圖，看 `.env` 裡有沒有金鑰自動切換。站點 Pin、使用者藍點、中心點與 zoom 兩邊共用，換底圖不會動到任何畫面。
 
-要換成真正的 Google Maps：加入 `google_maps_flutter`、把 `lib/widgets/map_backdrop.dart` 裡的 `FlutterMap` 換成 `GoogleMap`，中心點與 zoom 參數不用動。要換成其他有樣式的圖磚（Stadia Alidade Smooth、CARTO Positron）則只需要改 `MapBackdrop.tileUrl`，但兩者都需要金鑰。
+| | 需要金鑰 | 說明 |
+| --- | --- | --- |
+| Google Maps | 是 | 真正的 Google 底圖，另外關掉 POI／大眾運輸標籤讓 Pin 更明顯 |
+| OpenStreetMap | 否 | 圖磚套一層色彩矩陣調成接近 Google 的淺灰底，沒金鑰時的 fallback |
+
+Pin 是用 Web Mercator 投影自己算螢幕座標畫上去的 Flutter widget（不是 `BitmapDescriptor`），兩套底圖長得一模一樣，PRO 標籤與點擊區都保留。
+
+### 金鑰放哪
+
+金鑰只存在專案根目錄的 `.env`，**已被 .gitignore 排除，不會進版控**。照 `.env.example` 複製一份填上即可：
+
+```
+GOOGLE_MAPS_API_KEY=AIza...
+```
+
+第一次 clone 下來（或換了金鑰）跑一次產生器，把 `.env` 的金鑰寫進 `lib/config/map_key.dart`：
+
+```bash
+./tool/gen_map_key.sh
+```
+
+之後直接跑就是 Google Maps，不需要任何額外參數：
+
+```bash
+flutter run -d chrome
+```
+
+`lib/config/map_key.dart` 同樣被 .gitignore 排除；版控裡只有 `map_key.example.dart` 範本。
+沒跑產生器、或 `.env` 沒有金鑰時，`useGoogleMaps` 會是 false，自動退回 OpenStreetMap，不會壞掉。
+CI 之類不方便放檔案的環境，仍可用 `--dart-define-from-file=.env` 覆蓋。
+
+各平台怎麼拿到金鑰：
+
+| 平台 | 來源 | 要不要手動貼 |
+| --- | --- | --- |
+| Web | `lib/config/maps_loader_web.dart` 啟動時動態插入 Maps JS `<script>` | 不用 |
+| 全平台（Dart 端） | `tool/gen_map_key.sh` 從 `.env` 產生 `lib/config/map_key.dart` | 不用 |
+| Android | `app/build.gradle.kts` 讀 `.env` → `manifestPlaceholders` → AndroidManifest | 不用 |
+| iOS | `main()` 透過 `irent_pulse/maps` channel 把金鑰交給 `AppDelegate` 的 `GMSServices.provideAPIKey` | 不用 |
+
+### 已知限制
+
+`google_maps_flutter_web` 不吃 `GoogleMap.padding`，所以 Web 版沒辦法把 Google 標誌／版權列推到自訂 UI 上方，只能從我們這邊留白（首頁底部列因此多留了 14px）。Android／iOS 會正常吃 `padding`。
 
 ---
 

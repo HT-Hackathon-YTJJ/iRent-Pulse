@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../data/vehicle.dart';
 import '../design/tokens.dart';
+import '../widgets/back_button.dart';
+import '../widgets/bottom_action_bar.dart';
 import '../widgets/map_backdrop.dart';
 import '../widgets/pill_button.dart';
 import '../widgets/vehicle_header.dart';
@@ -15,15 +17,19 @@ import 'vehicle_status_screen.dart';
 /// Map + vehicle card. Entry point of the "安心上路輔助" flow:
 /// 開鎖 → 偵測車款 → 車輛規格 → 如何啟動 → 是否啟用輔助 → 輔助 / 車輛資訊
 class TripScreen extends StatefulWidget {
-  const TripScreen({super.key});
+  const TripScreen({super.key, this.vehicle = corollaCross});
+
+  /// The car that was booked on the map. Defaults to the demo vehicle.
+  final VehicleProfile vehicle;
 
   @override
   State<TripScreen> createState() => _TripScreenState();
 }
 
 class _TripScreenState extends State<TripScreen> {
-  static const _vehicle = corollaCross;
   bool _busy = false;
+
+  VehicleProfile get _vehicle => widget.vehicle;
 
   Future<void> _runUnlockFlow() async {
     if (_busy) return;
@@ -49,13 +55,14 @@ class _TripScreenState extends State<TripScreen> {
     if (enableAssist == true) {
       await Navigator.of(context).push(
         MaterialPageRoute(
-          builder: (_) => const SafeDriveAssistScreen(vehicle: _vehicle),
+          builder: (_) =>
+              SafeDriveAssistScreen(vehicle: _vehicle, replaceWithStatus: true),
         ),
       );
     } else if (enableAssist == false) {
       await Navigator.of(context).push(
         MaterialPageRoute(
-          builder: (_) => const VehicleStatusScreen(vehicle: _vehicle),
+          builder: (_) => VehicleStatusScreen(vehicle: _vehicle),
         ),
       );
     }
@@ -69,7 +76,11 @@ class _TripScreenState extends State<TripScreen> {
         child: Stack(
           children: [
             Positioned.fill(
-              child: MapBackdrop(center: DemoPlace.chengKung, zoom: 14.9),
+              child: MapBackdrop(
+                center: DemoPlace.chengKung,
+                zoom: 14.9,
+                bottomPadding: 226 + MediaQuery.paddingOf(context).bottom,
+              ),
             ),
             SafeArea(
               bottom: false,
@@ -77,24 +88,8 @@ class _TripScreenState extends State<TripScreen> {
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
                 child: Align(
                   alignment: Alignment.topLeft,
-                  child: Material(
-                    color: Colors.white,
-                    shape: const CircleBorder(),
-                    elevation: 3,
-                    shadowColor: const Color(0x33000000),
-                    child: InkWell(
-                      customBorder: const CircleBorder(),
-                      onTap: () => Navigator.of(context).maybePop(),
-                      child: const SizedBox(
-                        width: 44,
-                        height: 44,
-                        child: Icon(
-                          Icons.chevron_left,
-                          size: 28,
-                          color: AppColor.textPrimary,
-                        ),
-                      ),
-                    ),
+                  child: AppBackButton(
+                    onTap: () => Navigator.of(context).maybePop(),
                   ),
                 ),
               ),
@@ -104,15 +99,9 @@ class _TripScreenState extends State<TripScreen> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const VehicleHeaderPanel(vehicle: _vehicle, compact: true),
-                  Container(
-                    color: Colors.white,
-                    padding: EdgeInsets.fromLTRB(
-                      16,
-                      14,
-                      16,
-                      14 + MediaQuery.paddingOf(context).bottom,
-                    ),
+                  VehicleHeaderPanel(vehicle: _vehicle, compact: true),
+                  BottomActionBar(
+                    shadow: false,
                     child: Row(
                       children: [
                         Container(

@@ -99,3 +99,11 @@ firebase-adminsdk*.json
 /coverage/
 test/**/failures/
 *.lcov
+
+# 本機祕密：Google Maps API Key 等。切勿進版控。
+.env
+.env.local
+!.env.example
+
+# 由 tool/gen_map_key.sh 從 .env 產生的本機金鑰
+lib/config/map_key.dart

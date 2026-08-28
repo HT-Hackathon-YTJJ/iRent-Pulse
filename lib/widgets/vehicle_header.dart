@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../data/vehicle.dart';
 import '../design/tokens.dart';
+import 'back_button.dart';
 import 'dark_sheet.dart';
 
 /// Dark vehicle block shared by the map card and the vehicle-status screen:
@@ -24,6 +25,12 @@ class VehicleHeaderPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // A back button in the badge row makes that row as tall as the tap target,
+    // so the top padding and the gap below shrink by the same amount: the
+    // chevron lines up with the floating back button on the map screens while
+    // the badges and the plate stay exactly where they were.
+    final hasLeading = leading != null;
+
     return Container(
       width: double.infinity,
       decoration: const BoxDecoration(
@@ -43,7 +50,11 @@ class VehicleHeaderPanel extends StatelessWidget {
           Padding(
             padding: EdgeInsets.fromLTRB(
               16,
-              showGrabber ? 0 : 14,
+              showGrabber
+                  ? 0
+                  : hasLeading
+                  ? 8
+                  : 14,
               16,
               compact ? 14 : 18,
             ),
@@ -51,33 +62,37 @@ class VehicleHeaderPanel extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Row(
-                  children: [
-                    Image.asset(
-                      'assets/images/irent_logo.png',
-                      width: 30,
-                      height: 24,
-                      fit: BoxFit.contain,
-                    ),
-                    const SizedBox(width: 10),
-                    const _Badge(
-                      text: '安心服務',
-                      bg: AppColor.accentBlueSoft,
-                      fg: AppColor.accentBlue,
-                    ),
-                    const Spacer(),
-                    const _Badge(
-                      text: '抗冠空氣清淨',
-                      bg: AppColor.mint,
-                      fg: Colors.white,
-                    ),
-                    if (trailing != null) ...[
-                      const SizedBox(width: 8),
-                      trailing!,
+                SizedBox(
+                  height: hasLeading ? AppBackButton.size : null,
+                  child: Row(
+                    children: [
+                      if (hasLeading) ...[leading!, const SizedBox(width: 2)],
+                      Image.asset(
+                        'assets/images/irent_logo.png',
+                        width: 30,
+                        height: 24,
+                        fit: BoxFit.contain,
+                      ),
+                      const SizedBox(width: 10),
+                      const _Badge(
+                        text: '安心服務',
+                        bg: AppColor.accentBlueSoft,
+                        fg: AppColor.accentBlue,
+                      ),
+                      const Spacer(),
+                      const _Badge(
+                        text: '抗冠空氣清淨',
+                        bg: AppColor.mint,
+                        fg: Colors.white,
+                      ),
+                      if (trailing != null) ...[
+                        const SizedBox(width: 8),
+                        trailing!,
+                      ],
                     ],
-                  ],
+                  ),
                 ),
-                const SizedBox(height: 10),
+                SizedBox(height: hasLeading ? 2 : 10),
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -89,7 +104,7 @@ class VehicleHeaderPanel extends StatelessWidget {
                           Text(
                             vehicle.plate,
                             style: const TextStyle(
-                              fontSize: 27,
+                              fontSize: 23,
                               height: 1.15,
                               fontWeight: FontWeight.w700,
                               color: Colors.white,
@@ -102,7 +117,7 @@ class VehicleHeaderPanel extends StatelessWidget {
                               Text(
                                 '8/18  15:30',
                                 style: TextStyle(
-                                  fontSize: 14,
+                                  fontSize: 12.5,
                                   color: Colors.white,
                                   height: 1.2,
                                 ),
@@ -111,14 +126,14 @@ class VehicleHeaderPanel extends StatelessWidget {
                                 padding: EdgeInsets.symmetric(horizontal: 10),
                                 child: Icon(
                                   Icons.arrow_forward,
-                                  size: 13,
+                                  size: 12,
                                   color: Colors.white,
                                 ),
                               ),
                               Text(
                                 '8/18  17:30',
                                 style: TextStyle(
-                                  fontSize: 14,
+                                  fontSize: 12.5,
                                   color: Colors.white,
                                   height: 1.2,
                                 ),
@@ -130,14 +145,14 @@ class VehicleHeaderPanel extends StatelessWidget {
                             children: [
                               Icon(
                                 Icons.location_on,
-                                size: 18,
+                                size: 16,
                                 color: Colors.white,
                               ),
                               SizedBox(width: 4),
                               Text(
                                 '成大站',
                                 style: TextStyle(
-                                  fontSize: 14,
+                                  fontSize: 12.5,
                                   fontWeight: FontWeight.w500,
                                   color: Colors.white,
                                   decoration: TextDecoration.underline,
@@ -153,7 +168,7 @@ class VehicleHeaderPanel extends StatelessWidget {
                       padding: const EdgeInsets.only(top: 4),
                       child: Image.asset(
                         vehicle.heroImage,
-                        width: compact ? 150 : 176,
+                        width: compact ? 132 : 152,
                         fit: BoxFit.contain,
                       ),
                     ),
@@ -178,7 +193,7 @@ class _Badge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
       decoration: BoxDecoration(
         color: bg,
         borderRadius: BorderRadius.circular(AppRadius.pill),
@@ -186,7 +201,7 @@ class _Badge extends StatelessWidget {
       child: Text(
         text,
         style: TextStyle(
-          fontSize: 12.5,
+          fontSize: 11.5,
           fontWeight: FontWeight.w500,
           color: fg,
           height: 1.3,

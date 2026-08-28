@@ -1,12 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'config/map_config.dart';
 import 'design/tokens.dart';
 import 'screens/home_map_screen.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+  // 地圖要在第一張地圖建立前初始化：Web 載 JS SDK、iOS 把金鑰交給 GMSServices。
+  // 沒有金鑰（或初始化失敗）時會自動退回 OpenStreetMap 底圖。
+  await initGoogleMaps();
   runApp(const IRentPulseApp());
 }
 
@@ -52,6 +56,14 @@ class IRentPulseApp extends StatelessWidget {
           fontFamily: family,
           fontFamilyFallback: fallback,
         ),
+      ),
+      // The reference screenshots came from a phone with an enlarged system
+      // font, which is what made the first replica read oversized. Pinning the
+      // scale keeps every control at its designed size on any device.
+      builder: (context, child) => MediaQuery.withClampedTextScaling(
+        minScaleFactor: 1.0,
+        maxScaleFactor: 1.0,
+        child: child!,
       ),
       home: const HomeMapScreen(),
     );

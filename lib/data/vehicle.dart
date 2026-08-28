@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 /// One numbered callout on a diagram. [marks] are fractional positions
@@ -83,6 +85,108 @@ class StartupStep {
   final String text;
 }
 
+/// The two ways a car can be picked up on the map. Both share one booking
+/// sheet — only the wording and the pick-up point differ.
+enum RentMode { station, roadside }
+
+extension RentModeLabel on RentMode {
+  String get label => this == RentMode.station ? '同站租還' : '路邊租還';
+
+  /// Copy for the primary CTA at the bottom of the booking sheet.
+  String get bookLabel => '預約$label';
+
+  /// Heading above the pick-up address inside the dark card.
+  String get pickupLabel => this == RentMode.station ? '取還車站點' : '停車位置';
+}
+
+/// One tile of the photo strip. The demo has no real inspection photos, so the
+/// renders are reframed instead of cropped into new assets.
+class VehiclePhoto {
+  const VehiclePhoto({
+    required this.asset,
+    required this.caption,
+    this.fit = BoxFit.cover,
+    this.alignment = Alignment.center,
+  });
+
+  final String asset;
+  final String caption;
+  final BoxFit fit;
+  final Alignment alignment;
+}
+
+/// An entry of the 租用履歷 tab. [reply] is iRent's answer to a complaint.
+class RentalReview {
+  const RentalReview({
+    required this.date,
+    required this.text,
+    this.reply,
+    this.negative = false,
+  });
+
+  final String date;
+  final String text;
+  final String? reply;
+  final bool negative;
+}
+
+/// An entry of the 保養紀錄 tab.
+class MaintenanceRecord {
+  const MaintenanceRecord({
+    required this.date,
+    required this.title,
+    required this.detail,
+  });
+
+  final String date;
+  final String title;
+  final String detail;
+}
+
+/// A single car offered on the map: a [VehicleProfile] plus everything that is
+/// specific to *this* car sitting at *this* spot (plate, address, price…).
+class VehicleListing {
+  const VehicleListing({
+    required this.vehicle,
+    required this.mode,
+    required this.region,
+    required this.address,
+    required this.hourlyRate,
+    required this.lastUsedOn,
+    this.assuranceRate = 70,
+    this.mileageRate = 1.5,
+    this.holdMinutes = 30,
+  });
+
+  final VehicleProfile vehicle;
+  final RentMode mode;
+
+  /// 營運區域，例如「北區」。
+  final String region;
+
+  /// 站點名稱（同站租還）或路邊停車位置（路邊租還）。
+  final String address;
+
+  /// 平日每小時租金。
+  final int hourlyRate;
+
+  /// 安心服務每趟加購金額。
+  final int assuranceRate;
+
+  /// 里程費（元 / 公里）。
+  final double mileageRate;
+
+  /// 取車保留倒數（分鐘）。
+  final int holdMinutes;
+
+  final String lastUsedOn;
+
+  String get plate => vehicle.plate;
+
+  int estimate({required int hours, required bool assurance}) =>
+      hourlyRate * hours + (assurance ? assuranceRate : 0);
+}
+
 class VehicleProfile {
   const VehicleProfile({
     required this.plate,
@@ -95,6 +199,10 @@ class VehicleProfile {
     required this.startupSteps,
     required this.startupNote,
     required this.assistSections,
+    this.photos = const [],
+    this.equipment = const [],
+    this.reviews = const [],
+    this.maintenance = const [],
   });
 
   final String plate;
@@ -108,11 +216,41 @@ class VehicleProfile {
   final String startupNote;
   final List<AssistSection> assistSections;
 
+  /// Photo strip shown above the tabs of the booking sheet.
+  final List<VehiclePhoto> photos;
+
+  /// 規格配備 tab.
+  final List<SpecRow> equipment;
+
+  /// 租用履歷 tab.
+  final List<RentalReview> reviews;
+
+  /// 保養紀錄 tab.
+  final List<MaintenanceRecord> maintenance;
+
   String get fullName => '$brand $model';
 
   AssistSection sectionById(String id) => assistSections.firstWhere(
     (s) => s.id == id,
     orElse: () => assistSections.first,
+  );
+
+  /// Every car on the map is the same model with its own plate.
+  VehicleProfile withPlate(String plate) => VehicleProfile(
+    plate: plate,
+    brand: brand,
+    model: model,
+    heroImage: heroImage,
+    sideImage: sideImage,
+    interiorImage: interiorImage,
+    specs: specs,
+    startupSteps: startupSteps,
+    startupNote: startupNote,
+    assistSections: assistSections,
+    photos: photos,
+    equipment: equipment,
+    reviews: reviews,
+    maintenance: maintenance,
   );
 }
 
@@ -375,6 +513,62 @@ const _steering = AssistSection(
   ],
 );
 
+const _corollaPhotos = <VehiclePhoto>[
+  VehiclePhoto(
+    asset: 'assets/images/car_corolla_cross_hero.png',
+    caption: '車輛外觀',
+    fit: BoxFit.contain,
+  ),
+  VehiclePhoto(asset: 'assets/images/interior_start.jpg', caption: '車內座艙'),
+  VehiclePhoto(
+    asset: 'assets/images/car_corolla_cross.png',
+    caption: '車頭近拍',
+    alignment: Alignment.centerLeft,
+  ),
+];
+
+const _corollaEquipment = <SpecRow>[
+  SpecRow('車型級距', '跨界休旅車（CUV）'),
+  SpecRow('乘坐人數', '5 人座'),
+  SpecRow('排氣量', '1,798 c.c.'),
+  SpecRow('引擎型式', '直列四缸 Dual VVT-i（油電版搭配電動馬達）'),
+  SpecRow('動力輸出', '油電版・綜效最大馬力 122 ps'),
+  SpecRow('變速系統', 'E-CVT 電子控制無段變速系統（油電）'),
+  SpecRow('驅動方式', '前輪驅動（FF）'),
+  SpecRow('車身尺碼', '長 4,460 mm × 寬 1,825 mm × 高 1,620 mm'),
+];
+
+const _corollaReviews = <RentalReview>[
+  RentalReview(date: '2026/07/31', text: '空間真的很大，搬家超方便，下次還會再租'),
+  RentalReview(
+    date: '2026/07/28',
+    text: '一上車就有濃濃的煙味，座椅上感覺還有煙灰',
+    reply: '已派員清潔！感謝您的回報',
+    negative: true,
+  ),
+  RentalReview(date: '2026/07/21', text: '車內很乾淨也沒有異味，還車拍照還會送點數，太好了'),
+  RentalReview(date: '2026/07/14', text: '油電很省油，開一整天只加了半桶'),
+];
+
+const _corollaMaintenance = <MaintenanceRecord>[
+  MaintenanceRecord(
+    date: '2026/07/26',
+    title: '定期保養',
+    detail: '更換機油、機油芯，四輪定位檢查',
+  ),
+  MaintenanceRecord(
+    date: '2026/06/30',
+    title: '輪胎更換',
+    detail: '更換前輪胎組（原廠規格 225/50 R18）',
+  ),
+  MaintenanceRecord(date: '2026/05/18', title: '車內清潔', detail: '座椅深層清潔、冷氣濾網更換'),
+  MaintenanceRecord(
+    date: '2026/04/02',
+    title: '電池檢測',
+    detail: '油電系統與 12V 電瓶健康度檢測，狀態正常',
+  ),
+];
+
 const corollaCross = VehicleProfile(
   plate: 'REN-0000',
   brand: 'Toyota',
@@ -397,4 +591,98 @@ const corollaCross = VehicleProfile(
   ],
   startupNote: '引擎啟動後，儀表板會亮起並顯示 READY',
   assistSections: [_overview, _dashboard, _switches, _shifter, _steering],
+  photos: _corollaPhotos,
+  equipment: _corollaEquipment,
+  reviews: _corollaReviews,
+  maintenance: _corollaMaintenance,
 );
+
+// ---------------------------------------------------------------------------
+// The cars sitting on the map. Same model throughout the demo — what changes
+// per pin is the plate, the pick-up point and the price.
+// ---------------------------------------------------------------------------
+
+/// (車牌, 取車點, 平日時租)
+const _stationSpots = <(String, String, int)>[
+  ('REN-0000', 'iRent 成大自強站', 160),
+  ('RCF-6603', 'iRent 台中寶善寺站（建議倒車入庫）', 160),
+  ('RDT-1128', 'iRent 台中太原路站', 150),
+  ('RBX-7420', 'iRent 中友百貨站 B2', 180),
+  ('RAK-3391', 'iRent 一中商圈站', 170),
+  ('RCM-5507', 'iRent 台中車站前站', 160),
+  ('RDS-6182', 'iRent 忠明南路站', 150),
+  ('RFN-9043', 'iRent 水源地公園站', 160),
+];
+
+const _roadsideSpots = <(String, String, int)>[
+  ('RCF-6605', '新北市新店區北新路 200 號', 165),
+  ('RGH-2274', '台中市北區太原路二段 88 號', 165),
+  ('RJP-8810', '台中市北區梅亭街 12 號旁', 155),
+  ('RKL-4406', '台中市中區綠川西街 33 號', 175),
+  ('RNQ-1937', '台中市北區漢口路三段 51 號', 160),
+  ('RPT-5528', '台中市西區美村路一段 9 號', 170),
+  ('RSV-7761', '台中市北區崇德路一段 120 號', 155),
+  ('RWZ-3094', '台中市中區民權路 76 號', 165),
+];
+
+List<VehicleListing> _listingsFor(RentMode mode) => [
+  for (final (plate, address, rate)
+      in mode == RentMode.station ? _stationSpots : _roadsideSpots)
+    VehicleListing(
+      vehicle: corollaCross.withPlate(plate),
+      mode: mode,
+      region: mode == RentMode.station ? '中區' : '北區',
+      address: address,
+      hourlyRate: rate,
+      lastUsedOn: '115/7/31',
+    ),
+];
+
+final stationListings = _listingsFor(RentMode.station);
+final roadsideListings = _listingsFor(RentMode.roadside);
+
+List<VehicleListing> listingsFor(RentMode mode) =>
+    mode == RentMode.station ? stationListings : roadsideListings;
+
+/// Taiwanese plates skip I and O so they cannot be read as 1 and 0.
+const _plateLetters = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+
+String _plate(math.Random rng) {
+  final letters = [
+    for (var i = 0; i < 3; i++)
+      _plateLetters[rng.nextInt(_plateLetters.length)],
+  ].join();
+  return '$letters-${1000 + rng.nextInt(9000)}';
+}
+
+/// The cars behind one map pin — the deck shown before the booking sheet.
+///
+/// 同站租還 → the whole fleet parked at that station: 3–4 cars sharing the
+/// spot, the demo model throughout, with plates drawn from a generator seeded
+/// on the station name so a card keeps its plate across rebuilds.
+///
+/// 路邊租還 → the car that was tapped first, then the closest other road-side
+/// cars, so the deck doubles as a "nearby" list.
+List<VehicleListing> listingsAtPin(VehicleListing tapped) {
+  if (tapped.mode == RentMode.roadside) {
+    return [
+      tapped,
+      ...roadsideListings.where((l) => l.plate != tapped.plate).take(3),
+    ];
+  }
+
+  final rng = math.Random(tapped.address.hashCode);
+  final count = 3 + rng.nextInt(2);
+  return [
+    tapped,
+    for (var i = 1; i < count; i++)
+      VehicleListing(
+        vehicle: corollaCross.withPlate(_plate(rng)),
+        mode: tapped.mode,
+        region: tapped.region,
+        address: tapped.address,
+        hourlyRate: tapped.hourlyRate,
+        lastUsedOn: tapped.lastUsedOn,
+      ),
+  ];
+}

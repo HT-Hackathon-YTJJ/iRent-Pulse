@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../data/vehicle.dart';
 import '../design/tokens.dart';
 import '../widgets/dark_sheet.dart';
+import '../widgets/bottom_action_bar.dart';
 import '../widgets/pill_button.dart';
 
 Future<void> showStartVehicleSheet(
@@ -75,13 +76,9 @@ class _StartVehicleSheet extends StatelessWidget {
                   fit: BoxFit.cover,
                 ),
               ),
-              Padding(
-                padding: EdgeInsets.fromLTRB(
-                  24,
-                  18,
-                  24,
-                  18 + MediaQuery.paddingOf(context).bottom,
-                ),
+              BottomActionBar(
+                shadow: false,
+                padding: const EdgeInsets.fromLTRB(24, 18, 24, 18),
                 child: Column(
                   children: [
                     Row(
