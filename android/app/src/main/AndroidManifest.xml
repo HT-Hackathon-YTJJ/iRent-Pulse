@@ -1,6 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application
-        android:label="irent_pulse"
+        android:label="iRent Pulse"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <!-- 金鑰由 app/build.gradle.kts 從專案根目錄的 .env 讀進來，

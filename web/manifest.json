@@ -1,6 +1,6 @@
 {
-    "name": "irent_pulse",
-    "short_name": "irent_pulse",
+    "name": "iRent Pulse",
+    "short_name": "iRent Pulse",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
