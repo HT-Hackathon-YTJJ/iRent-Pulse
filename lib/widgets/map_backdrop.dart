@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart' as fm;
@@ -85,9 +86,11 @@ class MapPin {
 ///   light basemap by [_googleLikeFilter].
 /// * **Google Maps** — the real thing, once an API key is configured.
 ///
-/// Pins are plain Flutter widgets in both cases: they are projected onto the
-/// viewport with Web Mercator maths, so [StationPin] renders identically
-/// whichever backend is live.
+/// [StationPin] is the same artwork on both backends, but each backend draws it
+/// the way its own map wants: flutter_map takes the widget straight into its
+/// marker layer, while Google Maps gets it rasterised into a real SDK marker.
+/// Either way the pins live in the map's frame, so they pan and zoom locked to
+/// the tiles instead of trailing a frame behind them.
 class MapBackdrop extends StatelessWidget {
   const MapBackdrop({
     super.key,
@@ -270,6 +273,20 @@ class _GoogleBackdrop extends StatefulWidget {
   State<_GoogleBackdrop> createState() => _GoogleBackdropState();
 }
 
+/// The pins are handed to the Maps SDK as real markers, not as Flutter widgets
+/// projected onto the viewport.
+///
+/// That is the whole point: a marker belongs to the map's own frame, so it
+/// pans, zooms and settles in the *same* frame as the tiles under it. The
+/// widget overlay this replaces had to mirror the camera through
+/// `onCameraMove`, which arrives after the map has already drawn — the pins
+/// visibly lagged the basemap and drifted while zooming, because a widget's
+/// screen offset is recomputed per camera event rather than scaled with the
+/// projection.
+///
+/// The price is that a marker is a bitmap, so [StationPin]'s artwork is
+/// rasterised once per appearance by [_renderPinBitmap] and cached in
+/// [_markerBitmaps] for the rest of the session.
 class _GoogleBackdropState extends State<_GoogleBackdrop> {
   /// Trims POI clutter so the iRent pins stay the loudest thing on the map.
   static const _style =
@@ -277,106 +294,256 @@ class _GoogleBackdropState extends State<_GoogleBackdrop> {
       '{"featureType":"transit","elementType":"labels","stylers":[{"visibility":"off"}]},'
       '{"featureType":"road","elementType":"labels.icon","stylers":[{"visibility":"off"}]}]';
 
-  late LatLng _center = widget.center;
-  late double _zoom = widget.zoom;
+  @override
+  void initState() {
+    super.initState();
+    _ensureBitmaps();
+  }
+
+  @override
+  void didUpdateWidget(covariant _GoogleBackdrop oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _ensureBitmaps();
+  }
+
+  /// Rasterises whatever the current pins need and is not cached yet. Anything
+  /// already cached is picked up synchronously by [build], so switching mode or
+  /// screen never drops the markers for a frame.
+  Future<void> _ensureBitmaps() async {
+    var added = false;
+    for (final pin in widget.pins) {
+      final key = _pinKey(pin);
+      if (_markerBitmaps.containsKey(key)) continue;
+      _markerBitmaps[key] = await _renderPinBitmap(pin);
+      added = true;
+    }
+    if (widget.showUserDot && !_markerBitmaps.containsKey(_userDotKey)) {
+      _markerBitmaps[_userDotKey] = await _renderUserDotBitmap();
+      added = true;
+    }
+    if (added && mounted) setState(() {});
+  }
+
+  Set<gmap.Marker> get _markers {
+    final markers = <gmap.Marker>{};
+
+    final dot = _markerBitmaps[_userDotKey];
+    if (widget.showUserDot && dot != null) {
+      markers.add(
+        gmap.Marker(
+          markerId: const gmap.MarkerId('user'),
+          position: gmap.LatLng(
+            widget.center.latitude,
+            widget.center.longitude,
+          ),
+          icon: dot,
+          anchor: const Offset(0.5, 0.5),
+        ),
+      );
+    }
+
+    for (var i = 0; i < widget.pins.length; i++) {
+      final pin = widget.pins[i];
+      final icon = _markerBitmaps[_pinKey(pin)];
+      if (icon == null) continue;
+      markers.add(
+        gmap.Marker(
+          markerId: gmap.MarkerId('pin_$i'),
+          position: gmap.LatLng(pin.point.latitude, pin.point.longitude),
+          icon: icon,
+          anchor: _PinBitmap.anchor,
+          zIndexInt: i + 1,
+          // Otherwise a tap on a pin also reaches GoogleMap.onTap and the
+          // screen closes the sheet the very tap just opened.
+          consumeTapEvents: pin.onTap != null,
+          onTap: pin.onTap,
+        ),
+      );
+    }
+    return markers;
+  }
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, c) {
-        final viewport = Size(c.maxWidth, c.maxHeight);
-        return Stack(
-          children: [
-            Positioned.fill(
-              child: gmap.GoogleMap(
-                initialCameraPosition: gmap.CameraPosition(
-                  target: gmap.LatLng(
-                    widget.center.latitude,
-                    widget.center.longitude,
-                  ),
-                  zoom: widget.zoom,
-                ),
-                style: _style,
-                mapType: gmap.MapType.normal,
-                padding: EdgeInsets.only(bottom: widget.bottomPadding),
-                compassEnabled: false,
-                mapToolbarEnabled: false,
-                myLocationButtonEnabled: false,
-                zoomControlsEnabled: false,
-                rotateGesturesEnabled: false,
-                tiltGesturesEnabled: false,
-                scrollGesturesEnabled: widget.interactive,
-                zoomGesturesEnabled: widget.interactive,
-                onTap: widget.onMapTap == null
-                    ? null
-                    : (_) => widget.onMapTap!(),
-                onCameraMove: (position) => setState(() {
-                  _center = LatLng(
-                    position.target.latitude,
-                    position.target.longitude,
-                  );
-                  _zoom = position.zoom;
-                }),
-              ),
-            ),
-            if (widget.showUserDot)
-              _place(
-                viewport: viewport,
-                point: widget.center,
-                size: const Size(26, 26),
-                anchor: const Alignment(0, 0),
-                child: const _UserDot(),
-              ),
-            for (final pin in widget.pins)
-              _place(
-                viewport: viewport,
-                point: pin.point,
-                size: const Size(StationPin.width, StationPin.height),
-                anchor: Alignment.bottomCenter,
-                child: StationPin(
-                  color: pin.color,
-                  pro: pin.pro,
-                  icon: pin.icon,
-                  iconSize: pin.iconSize,
-                  onTap: pin.onTap,
-                ),
-              ),
-          ],
-        );
-      },
+    return gmap.GoogleMap(
+      initialCameraPosition: gmap.CameraPosition(
+        target: gmap.LatLng(widget.center.latitude, widget.center.longitude),
+        zoom: widget.zoom,
+      ),
+      style: _style,
+      mapType: gmap.MapType.normal,
+      markers: _markers,
+      padding: EdgeInsets.only(bottom: widget.bottomPadding),
+      compassEnabled: false,
+      mapToolbarEnabled: false,
+      myLocationButtonEnabled: false,
+      zoomControlsEnabled: false,
+      rotateGesturesEnabled: false,
+      tiltGesturesEnabled: false,
+      scrollGesturesEnabled: widget.interactive,
+      zoomGesturesEnabled: widget.interactive,
+      onTap: widget.onMapTap == null ? null : (_) => widget.onMapTap!(),
     );
   }
+}
 
-  /// Projects [point] onto the viewport and anchors [child] there.
-  Widget _place({
-    required Size viewport,
-    required LatLng point,
-    required Size size,
-    required Alignment anchor,
-    required Widget child,
-  }) {
-    final scale = math.pow(2, _zoom).toDouble() * 256;
-    double worldX(double lng) => (lng + 180) / 360 * scale;
-    double worldY(double lat) {
-      final s = math.sin(lat * math.pi / 180).clamp(-0.9999, 0.9999);
-      return (0.5 - math.log((1 + s) / (1 - s)) / (4 * math.pi)) * scale;
-    }
+// ---------------------------------------------------------------------------
+// Marker bitmaps
+// ---------------------------------------------------------------------------
 
-    final dx =
-        worldX(point.longitude) -
-        worldX(_center.longitude) +
-        viewport.width / 2;
-    final dy =
-        worldY(point.latitude) - worldY(_center.latitude) + viewport.height / 2;
+/// Rendered marker images, keyed by appearance. Shared by every map in the
+/// demo, so moving between screens never re-rasterises the same pin.
+final _markerBitmaps = <String, gmap.BitmapDescriptor>{};
 
-    return Positioned(
-      left: dx - size.width * (anchor.x + 1) / 2,
-      top: dy - size.height * (anchor.y + 1) / 2,
-      width: size.width,
-      height: size.height,
-      child: child,
-    );
-  }
+const _userDotKey = 'user-dot';
+
+String _pinKey(MapPin pin) =>
+    '${pin.color.toARGB32()}|${pin.pro}|${pin.icon?.codePoint}|${pin.iconSize}';
+
+/// Geometry of a rasterised [StationPin].
+///
+/// The bitmap is the pin's 30×39 box plus the room its drop shadow and the PRO
+/// badge need. The badge hangs off the top-right corner, so the artwork is not
+/// centred in the bitmap — [anchor] points the Maps SDK at the teardrop's tip,
+/// which is the pixel that has to sit on the coordinate.
+class _PinBitmap {
+  const _PinBitmap._();
+
+  static const padTop = 10.0;
+  static const padLeft = 8.0;
+  static const padRight = 26.0;
+  static const padBottom = 6.0;
+
+  static const width = StationPin.width + padLeft + padRight;
+  static const height = StationPin.height + padTop + padBottom;
+
+  static const anchor = Offset(
+    (padLeft + StationPin.width / 2) / width,
+    (padTop + StationPin.height) / height,
+  );
+
+  /// Rasterisation factor. 3× covers every screen we demo on.
+  static const scale = 3.0;
+}
+
+Future<gmap.BitmapDescriptor> _renderPinBitmap(MapPin pin) {
+  return _rasterise(
+    size: const Size(_PinBitmap.width, _PinBitmap.height),
+    paint: (canvas) {
+      canvas.translate(_PinBitmap.padLeft, _PinBitmap.padTop);
+      _PinPainter(
+        color: pin.color,
+        filled: pin.icon == null,
+      ).paint(canvas, const Size(StationPin.width, StationPin.height));
+      if (pin.icon != null) _paintGlyph(canvas, pin);
+      if (pin.pro) _paintProBadge(canvas);
+    },
+  );
+}
+
+Future<gmap.BitmapDescriptor> _renderUserDotBitmap() {
+  return _rasterise(
+    size: const Size(26, 26),
+    paint: (canvas) {
+      const centre = Offset(13, 13);
+      canvas.drawCircle(
+        centre.translate(0, 2),
+        8,
+        Paint()
+          ..color = const Color(0x40000000)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3),
+      );
+      canvas.drawCircle(centre, 8, Paint()..color = Colors.white);
+      canvas.drawCircle(centre, 5, Paint()..color = const Color(0xFF3A7BFF));
+    },
+  );
+}
+
+/// The glyph inside the white bubble — same metrics as the [Icon] the widget
+/// pin uses: centred in the bubble's circular head.
+void _paintGlyph(Canvas canvas, MapPin pin) {
+  final icon = pin.icon!;
+  final text = TextPainter(
+    text: TextSpan(
+      text: String.fromCharCode(icon.codePoint),
+      style: TextStyle(
+        fontSize: pin.iconSize,
+        fontFamily: icon.fontFamily,
+        package: icon.fontPackage,
+        color: pin.color,
+        height: 1,
+      ),
+    ),
+    textDirection: TextDirection.ltr,
+  )..layout();
+
+  text.paint(
+    canvas,
+    Offset(
+      (StationPin.width - text.width) / 2,
+      (StationPin.width - text.height) / 2,
+    ),
+  );
+}
+
+void _paintProBadge(Canvas canvas) {
+  final text = TextPainter(
+    text: const TextSpan(
+      text: 'PRO',
+      style: TextStyle(
+        fontSize: 7.5,
+        fontWeight: FontWeight.w800,
+        color: Colors.white,
+        height: 1.4,
+      ),
+    ),
+    textDirection: TextDirection.ltr,
+  )..layout();
+
+  // Matches the widget badge: 4/1 padding, pushed 7 past the right edge and 6
+  // above the top one.
+  final rect = Rect.fromLTWH(
+    StationPin.width + 7 - (text.width + 8),
+    -6,
+    text.width + 8,
+    text.height + 2,
+  );
+  final badge = RRect.fromRectAndRadius(rect, const Radius.circular(3));
+
+  canvas.drawRRect(
+    badge.shift(const Offset(0, 1)),
+    Paint()
+      ..color = const Color(0x33000000)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 1.5),
+  );
+  canvas.drawRRect(badge, Paint()..color = AppColor.brandBright);
+  text.paint(canvas, Offset(rect.left + 4, rect.top + 1));
+}
+
+Future<gmap.BitmapDescriptor> _rasterise({
+  required Size size,
+  required void Function(Canvas canvas) paint,
+}) async {
+  final recorder = ui.PictureRecorder();
+  final canvas = Canvas(recorder);
+  canvas.scale(_PinBitmap.scale);
+  paint(canvas);
+
+  final picture = recorder.endRecording();
+  final image = await picture.toImage(
+    (size.width * _PinBitmap.scale).ceil(),
+    (size.height * _PinBitmap.scale).ceil(),
+  );
+  picture.dispose();
+  final data = await image.toByteData(format: ui.ImageByteFormat.png);
+  image.dispose();
+
+  return gmap.BitmapDescriptor.bytes(
+    data!.buffer.asUint8List(),
+    width: size.width,
+    height: size.height,
+    imagePixelRatio: _PinBitmap.scale,
+  );
 }
 
 // ---------------------------------------------------------------------------
