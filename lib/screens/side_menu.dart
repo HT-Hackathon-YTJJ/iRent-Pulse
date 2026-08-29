@@ -159,36 +159,39 @@ class _StatPill extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Flexible(
-                child: Text(
+          // Two pills share the drawer width, so on a narrow display there is
+          // no room for "信用分數 | 117" at its designed size. Scaling the whole
+          // pill down keeps the label readable; clipping it left "信…｜117".
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
                   label,
                   maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     fontSize: 13.5,
                     fontWeight: FontWeight.w700,
                     color: Colors.white,
                   ),
                 ),
-              ),
-              Container(
-                width: 1,
-                height: 15,
-                margin: const EdgeInsets.symmetric(horizontal: 8),
-                color: Colors.white54,
-              ),
-              Text(
-                value,
-                style: const TextStyle(
-                  fontSize: 13.5,
-                  fontWeight: FontWeight.w700,
-                  color: Colors.white,
+                Container(
+                  width: 1,
+                  height: 15,
+                  margin: const EdgeInsets.symmetric(horizontal: 8),
+                  color: Colors.white54,
                 ),
-              ),
-            ],
+                Text(
+                  value,
+                  style: const TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white,
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -282,56 +285,63 @@ class _MenuCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 21),
-      child: Ink(
-        decoration: BoxDecoration(
-          color: AppColor.card,
-          borderRadius: BorderRadius.circular(8),
+      // The shadow hangs outside the Material rather than being an Ink
+      // decoration inside it: a Material clips its ink features to its own
+      // rectangle, which squared the blur off and left a dark notch in each
+      // rounded corner.
+      child: DecoratedBox(
+        decoration: const BoxDecoration(
+          borderRadius: BorderRadius.all(Radius.circular(8)),
           boxShadow: AppShadow.card,
         ),
-        child: InkWell(
-          onTap: () {},
+        child: Material(
+          color: AppColor.card,
           borderRadius: BorderRadius.circular(8),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(15, 16, 15, 16),
-            child: Row(
-              children: [
-                Icon(entry.icon, size: 30, color: AppColor.textPrimary),
-                const SizedBox(width: 11),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        entry.title,
-                        style: const TextStyle(
-                          fontSize: 18,
-                          height: 1.1,
-                          fontWeight: FontWeight.w700,
-                          color: AppColor.textPrimary,
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: () {},
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(15, 16, 15, 16),
+              child: Row(
+                children: [
+                  Icon(entry.icon, size: 30, color: AppColor.textPrimary),
+                  const SizedBox(width: 11),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          entry.title,
+                          style: const TextStyle(
+                            fontSize: 18,
+                            height: 1.1,
+                            fontWeight: FontWeight.w700,
+                            color: AppColor.textPrimary,
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 3),
-                      Text(
-                        entry.subtitle,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w500,
-                          color: AppColor.textPlaceholder,
+                        const SizedBox(height: 3),
+                        Text(
+                          entry.subtitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w500,
+                            color: AppColor.textPlaceholder,
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
-                const SizedBox(width: 6),
-                const Icon(
-                  Icons.chevron_right,
-                  size: 18,
-                  color: AppColor.textPlaceholder,
-                ),
-              ],
+                  const SizedBox(width: 6),
+                  const Icon(
+                    Icons.chevron_right,
+                    size: 18,
+                    color: AppColor.textPlaceholder,
+                  ),
+                ],
+              ),
             ),
           ),
         ),

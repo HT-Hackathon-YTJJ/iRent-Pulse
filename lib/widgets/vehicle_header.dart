@@ -74,16 +74,30 @@ class VehicleHeaderPanel extends StatelessWidget {
                         fit: BoxFit.contain,
                       ),
                       const SizedBox(width: 10),
-                      const _Badge(
-                        text: '安心服務',
-                        bg: AppColor.accentBlueSoft,
-                        fg: AppColor.accentBlue,
+                      // The badges are the elastic part of this row: with a
+                      // back button on the left and a state chip on the right
+                      // they no longer fit at their designed size on a narrow
+                      // display. Flex in proportion to their natural widths so
+                      // that when they do have to shrink they shrink together,
+                      // and the gap between them survives on a wide one.
+                      const Expanded(
+                        flex: 3,
+                        child: _Badge(
+                          text: '安心服務',
+                          bg: AppColor.accentBlueSoft,
+                          fg: AppColor.accentBlue,
+                          alignment: Alignment.centerLeft,
+                        ),
                       ),
-                      const Spacer(),
-                      const _Badge(
-                        text: '抗冠空氣清淨',
-                        bg: AppColor.mint,
-                        fg: Colors.white,
+                      const SizedBox(width: 8),
+                      const Expanded(
+                        flex: 4,
+                        child: _Badge(
+                          text: '抗冠空氣清淨',
+                          bg: AppColor.mint,
+                          fg: Colors.white,
+                          alignment: Alignment.centerRight,
+                        ),
                       ),
                       if (trailing != null) ...[
                         const SizedBox(width: 8),
@@ -112,33 +126,40 @@ class VehicleHeaderPanel extends StatelessWidget {
                             ),
                           ),
                           const SizedBox(height: 10),
-                          const Row(
-                            children: [
-                              Text(
-                                '8/18  15:30',
-                                style: TextStyle(
-                                  fontSize: 12.5,
-                                  color: Colors.white,
-                                  height: 1.2,
+                          // Two timestamps and an arrow on one line, next to a
+                          // car render that keeps its width: the line scales
+                          // rather than running under the car.
+                          const FittedBox(
+                            fit: BoxFit.scaleDown,
+                            alignment: Alignment.centerLeft,
+                            child: Row(
+                              children: [
+                                Text(
+                                  '8/18  15:30',
+                                  style: TextStyle(
+                                    fontSize: 12.5,
+                                    color: Colors.white,
+                                    height: 1.2,
+                                  ),
                                 ),
-                              ),
-                              Padding(
-                                padding: EdgeInsets.symmetric(horizontal: 10),
-                                child: Icon(
-                                  Icons.arrow_forward,
-                                  size: 12,
-                                  color: Colors.white,
+                                Padding(
+                                  padding: EdgeInsets.symmetric(horizontal: 10),
+                                  child: Icon(
+                                    Icons.arrow_forward,
+                                    size: 12,
+                                    color: Colors.white,
+                                  ),
                                 ),
-                              ),
-                              Text(
-                                '8/18  17:30',
-                                style: TextStyle(
-                                  fontSize: 12.5,
-                                  color: Colors.white,
-                                  height: 1.2,
+                                Text(
+                                  '8/18  17:30',
+                                  style: TextStyle(
+                                    fontSize: 12.5,
+                                    color: Colors.white,
+                                    height: 1.2,
+                                  ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
                           const SizedBox(height: 8),
                           const Row(
@@ -184,27 +205,41 @@ class VehicleHeaderPanel extends StatelessWidget {
 }
 
 class _Badge extends StatelessWidget {
-  const _Badge({required this.text, required this.bg, required this.fg});
+  const _Badge({
+    required this.text,
+    required this.bg,
+    required this.fg,
+    this.alignment = Alignment.center,
+  });
 
   final String text;
   final Color bg;
   final Color fg;
 
+  /// Which edge of the space it is given the pill sits against once that space
+  /// is wider than the pill needs.
+  final Alignment alignment;
+
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(AppRadius.pill),
-      ),
-      child: Text(
-        text,
-        style: TextStyle(
-          fontSize: 11.5,
-          fontWeight: FontWeight.w500,
-          color: fg,
-          height: 1.3,
+    return FittedBox(
+      fit: BoxFit.scaleDown,
+      alignment: alignment,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(AppRadius.pill),
+        ),
+        child: Text(
+          text,
+          maxLines: 1,
+          style: TextStyle(
+            fontSize: 11.5,
+            fontWeight: FontWeight.w500,
+            color: fg,
+            height: 1.3,
+          ),
         ),
       ),
     );

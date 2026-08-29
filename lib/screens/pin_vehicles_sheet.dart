@@ -138,10 +138,11 @@ class PinVehiclesSheetState extends State<PinVehiclesSheet> {
 
   static double _carWidth(double t) => lerpDouble(120, 148, t)!;
 
-  /// The home-indicator strip already reads as margin, so the collapsed card
-  /// borrows most of it instead of stacking its own padding on top.
+  /// The collapsed card sits on the screen edge, so its bottom padding has to
+  /// clear the system bar rather than borrow from it: an Android gesture bar
+  /// is only 24dp and the card's last line was landing underneath it.
   static double _cardPadBottom(double t, double inset) =>
-      lerpDouble(math.max(14, inset - 12), 16, t)!;
+      lerpDouble(math.max(14, inset), 16, t)!;
 
   static double _cardHeight(double t, double inset) =>
       _grabberBlock +
@@ -395,14 +396,23 @@ class _VehicleCard extends StatelessWidget {
                             mainAxisAlignment: MainAxisAlignment.center,
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Text(
-                                listing.plate,
-                                style: const TextStyle(
-                                  fontSize: 27,
-                                  height: 1.15,
-                                  fontWeight: FontWeight.w700,
-                                  color: Colors.white,
-                                  letterSpacing: 0.5,
+                              // The plate has to stay on one line: the block
+                              // is exactly as tall as the car render beside
+                              // it, so a wrapped plate pushed the address out
+                              // through the bottom of the card.
+                              FittedBox(
+                                fit: BoxFit.scaleDown,
+                                alignment: Alignment.centerLeft,
+                                child: Text(
+                                  listing.plate,
+                                  maxLines: 1,
+                                  style: const TextStyle(
+                                    fontSize: 27,
+                                    height: 1.15,
+                                    fontWeight: FontWeight.w700,
+                                    color: Colors.white,
+                                    letterSpacing: 0.5,
+                                  ),
                                 ),
                               ),
                               const SizedBox(height: 12),

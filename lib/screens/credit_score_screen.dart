@@ -50,17 +50,22 @@ class _CreditScoreScreenState extends State<CreditScoreScreen> {
                 const SizedBox(height: 14),
                 // The two cards carry different amounts of text, so the row
                 // is pinned to one height instead of each card sizing itself.
-                SizedBox(
-                  height: 88,
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Expanded(
-                        child: _RewardBalanceCard(points: data.rewardPoints),
-                      ),
-                      const SizedBox(width: 14),
-                      const Expanded(child: _RewardExchangeCard()),
-                    ],
+                // 88 is the floor rather than the height: on a narrow display
+                // 獎勵金兌換 wraps onto a second line and the row has to grow
+                // with it.
+                ConstrainedBox(
+                  constraints: const BoxConstraints(minHeight: 88),
+                  child: IntrinsicHeight(
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Expanded(
+                          child: _RewardBalanceCard(points: data.rewardPoints),
+                        ),
+                        const SizedBox(width: 14),
+                        const Expanded(child: _RewardExchangeCard()),
+                      ],
+                    ),
                   ),
                 ),
                 const SizedBox(height: 22),
@@ -118,33 +123,37 @@ class _Header extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: SizedBox(
               height: AppBackButton.size,
-              child: Stack(
+              // A Stack let the centred title run under the scenario chip once
+              // the screen was narrow enough for the two to meet. As a row the
+              // title only ever gets the space the chevron and the chip leave,
+              // and scales down inside it rather than colliding.
+              child: Row(
                 children: [
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: AppBackButton(
-                      onTap: () => Navigator.of(context).maybePop(),
-                      filled: false,
-                      color: Colors.white,
-                      tooltip: '返回',
-                    ),
+                  AppBackButton(
+                    onTap: () => Navigator.of(context).maybePop(),
+                    filled: false,
+                    color: Colors.white,
+                    tooltip: '返回',
                   ),
-                  const Center(
-                    child: Text(
-                      '信用分數與會員權益',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                        color: Colors.white,
+                  const Expanded(
+                    child: Center(
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Text(
+                          '信用分數與會員權益',
+                          maxLines: 1,
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.white,
+                          ),
+                        ),
                       ),
                     ),
                   ),
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: _ScenarioMenu(
-                      scenario: scenario,
-                      onChanged: onScenarioChanged,
-                    ),
+                  _ScenarioMenu(
+                    scenario: scenario,
+                    onChanged: onScenarioChanged,
                   ),
                 ],
               ),
@@ -513,45 +522,52 @@ class _OrderQuota extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            const Text(
-              '本期訂單',
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w500,
-                color: AppColor.textPrimary,
-              ),
-            ),
-            const SizedBox(width: 6),
-            Text.rich(
-              TextSpan(
-                children: [
-                  TextSpan(
-                    text: '${quota.done}',
-                    style: const TextStyle(color: AppColor.brand),
-                  ),
-                  TextSpan(text: '/${quota.total}'),
-                ],
-                style: const TextStyle(
-                  fontSize: 19,
-                  height: 1,
-                  fontWeight: FontWeight.w700,
+        // Half a card is not enough for this line at its designed sizes once
+        // the display width drops, and none of the three parts can be
+        // shortened, so the line scales as a whole.
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.centerLeft,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              const Text(
+                '本期訂單',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
                   color: AppColor.textPrimary,
                 ),
               ),
-            ),
-            const SizedBox(width: 3),
-            const Text(
-              '筆',
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w500,
-                color: AppColor.textPrimary,
+              const SizedBox(width: 6),
+              Text.rich(
+                TextSpan(
+                  children: [
+                    TextSpan(
+                      text: '${quota.done}',
+                      style: const TextStyle(color: AppColor.brand),
+                    ),
+                    TextSpan(text: '/${quota.total}'),
+                  ],
+                  style: const TextStyle(
+                    fontSize: 19,
+                    height: 1,
+                    fontWeight: FontWeight.w700,
+                    color: AppColor.textPrimary,
+                  ),
+                ),
               ),
-            ),
-          ],
+              const SizedBox(width: 3),
+              const Text(
+                '筆',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: AppColor.textPrimary,
+                ),
+              ),
+            ],
+          ),
         ),
         const SizedBox(height: 7),
         ClipRRect(
@@ -805,21 +821,25 @@ class _Card extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: AppColor.card,
-      borderRadius: BorderRadius.circular(AppRadius.chip),
+    const radius = BorderRadius.all(Radius.circular(AppRadius.chip));
+
+    // The shadow has to hang *outside* the Material, not inside it as an Ink
+    // decoration: a Material clips its ink features to its own rectangle, so
+    // the blur got squared off and the part of it between the rounded corner
+    // and that rectangle stayed on screen as a dark notch at each corner.
+    return DecoratedBox(
       // 10% / 10px instead of Figma's 25% / 5px: on the grey ground the cards
       // still lift, without the halo that made the screen feel crowded.
-      elevation: 0,
-      child: Ink(
-        decoration: BoxDecoration(
-          color: AppColor.card,
-          borderRadius: BorderRadius.circular(AppRadius.chip),
-          boxShadow: AppShadow.card,
-        ),
+      decoration: const BoxDecoration(
+        borderRadius: radius,
+        boxShadow: AppShadow.card,
+      ),
+      child: Material(
+        color: AppColor.card,
+        borderRadius: radius,
+        clipBehavior: Clip.antiAlias,
         child: InkWell(
           onTap: onTap,
-          borderRadius: BorderRadius.circular(AppRadius.chip),
           child: Padding(padding: padding, child: child),
         ),
       ),
@@ -873,25 +893,31 @@ class _ValueLine extends StatelessWidget {
   Widget build(BuildContext context) {
     // Bottom-aligned rather than baseline-aligned: baseline alignment cannot
     // be resolved inside IntrinsicHeight, and with these sizes the two read
-    // the same.
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.end,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        for (final part in parts)
-          Padding(
-            padding: const EdgeInsets.only(right: 5),
-            child: Text(
-              part.text,
-              style: TextStyle(
-                fontSize: part.size,
-                height: 1.1,
-                fontWeight: part.weight,
-                color: part.color,
+    // the same. Scaled as a whole for the same reason 本期訂單 is: a value line
+    // is one phrase at two sizes, and no part of it can be dropped.
+    return FittedBox(
+      fit: BoxFit.scaleDown,
+      alignment: Alignment.centerLeft,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final part in parts)
+            Padding(
+              padding: const EdgeInsets.only(right: 5),
+              child: Text(
+                part.text,
+                maxLines: 1,
+                style: TextStyle(
+                  fontSize: part.size,
+                  height: 1.1,
+                  fontWeight: part.weight,
+                  color: part.color,
+                ),
               ),
             ),
-          ),
-      ],
+        ],
+      ),
     );
   }
 }

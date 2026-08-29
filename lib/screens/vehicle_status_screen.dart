@@ -7,6 +7,7 @@ import '../widgets/bottom_action_bar.dart';
 import '../widgets/pill_button.dart';
 import '../widgets/vehicle_header.dart';
 import 'return_checklist_dialog.dart';
+import 'return_flow_screen.dart';
 import 'safe_drive_assist_screen.dart';
 
 /// The three states the demo walks through on the vehicle-status screen.
@@ -89,14 +90,11 @@ class _VehicleStatusScreenState extends State<VehicleStatusScreen> {
       fuelPercent: _data.fuelPercent,
     );
     if (!mounted || ok != true) return;
-    Navigator.of(context).popUntil((r) => r.isFirst);
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        behavior: SnackBarBehavior.floating,
-        backgroundColor: AppColor.success,
-        content: Text('已確認車輛狀態，進入還車流程'),
-      ),
-    );
+    // The checklist is the last thing asked indoors; everything after it is
+    // the camera flow.
+    await Navigator.of(
+      context,
+    ).push(MaterialPageRoute<void>(builder: (_) => const ReturnFlowScreen()));
   }
 
   @override
