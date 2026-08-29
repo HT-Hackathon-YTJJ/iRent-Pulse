@@ -1,6 +1,8 @@
 import 'dart:math' as math;
 import 'dart:ui' as ui;
+import 'dart:ui' show lerpDouble;
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart' as fm;
 import 'package:google_maps_flutter/google_maps_flutter.dart' as gmap;
@@ -32,21 +34,31 @@ const demoPinOffsets = <(double, double, bool, Color)>[
   (-0.0068, 0.0048, true, AppColor.brand),
 ];
 
-/// The demo's pins for [mode]. [onTap] receives the pin's index.
+/// Where the pin with [index] sits, so a screen can aim its camera at the pin
+/// it just selected without reaching into [demoPinOffsets] itself.
+LatLng demoPinLocation(int index) {
+  final offset = demoPinOffsets[index % demoPinOffsets.length];
+  return LatLng(
+    DemoPlace.taichung.latitude + offset.$1,
+    DemoPlace.taichung.longitude + offset.$2,
+  );
+}
+
+/// The demo's pins for [mode]. [onTap] receives the pin's index; the pin at
+/// [selected] is drawn in its focused style.
 List<MapPin> demoMapPins({
   required bool station,
   required void Function(int index) onTap,
+  int? selected,
 }) => [
   for (var i = 0; i < demoPinOffsets.length; i++)
     MapPin(
-      point: LatLng(
-        DemoPlace.taichung.latitude + demoPinOffsets[i].$1,
-        DemoPlace.taichung.longitude + demoPinOffsets[i].$2,
-      ),
+      point: demoPinLocation(i),
       color: demoPinOffsets[i].$4,
       pro: demoPinOffsets[i].$3,
       icon: station ? Icons.location_on : Icons.directions_car,
       iconSize: station ? 21 : 17,
+      selected: i == selected,
       onTap: () => onTap(i),
     ),
 ];
@@ -59,8 +71,12 @@ class MapPin {
     this.pro = false,
     this.icon,
     this.iconSize = 17,
+    this.selected = false,
     this.onTap,
   });
+
+  /// How much bigger the selected pin is drawn than the rest of the field.
+  static const selectedScale = 1.3;
 
   final LatLng point;
   final Color color;
@@ -74,7 +90,56 @@ class MapPin {
   /// chunkier than the car glyph in the production app.
   final double iconSize;
 
+  /// The pin the user just tapped. It inverts — solid brand bubble, white
+  /// glyph — and grows, so the map says which card the deck is showing.
+  final bool selected;
+
   final VoidCallback? onTap;
+
+  double get scale => selected ? selectedScale : 1.0;
+
+  /// The same pin in the other selection state. Used to keep both appearances
+  /// rasterised ahead of the tap on the Google backend.
+  MapPin withSelected(bool value) => MapPin(
+    point: point,
+    color: color,
+    pro: pro,
+    icon: icon,
+    iconSize: iconSize,
+    selected: value,
+    onTap: onTap,
+  );
+}
+
+/// A camera move a screen asks its basemap for — the Google Maps gesture of
+/// pulling the tapped pin into the middle of the map and leaning in.
+///
+/// [minZoom] is a floor, not a target: a map already closer than that stays
+/// where it is rather than zooming back out under the user.
+@immutable
+class MapFocus {
+  const MapFocus({
+    required this.target,
+    required this.minZoom,
+    required this.seq,
+  });
+
+  final LatLng target;
+  final double minZoom;
+
+  /// Bumped by the caller on every request, so tapping the same pin again
+  /// after panning away still re-centres it.
+  final int seq;
+
+  @override
+  bool operator ==(Object other) =>
+      other is MapFocus &&
+      other.seq == seq &&
+      other.minZoom == minZoom &&
+      other.target == target;
+
+  @override
+  int get hashCode => Object.hash(target, minZoom, seq);
 }
 
 /// Light basemap for every screen in the demo.
@@ -101,6 +166,7 @@ class MapBackdrop extends StatelessWidget {
     this.showUserDot = true,
     this.showAttribution = true,
     this.bottomPadding = 0,
+    this.focus,
     this.onMapTap,
   });
 
@@ -118,7 +184,13 @@ class MapBackdrop extends StatelessWidget {
   /// How much of the bottom edge the screen's own chrome covers. Keeps the
   /// basemap's logo and attribution visible above it — required by Google's
   /// terms, and it stops the © line from colliding with our buttons.
+  ///
+  /// It is also what [focus] centres against: the middle of the map the user
+  /// can actually see is the middle of what is left above this.
   final double bottomPadding;
+
+  /// Where to fly the camera. Set a new [MapFocus] to move it.
+  final MapFocus? focus;
 
   @override
   Widget build(BuildContext context) {
@@ -130,6 +202,7 @@ class MapBackdrop extends StatelessWidget {
         pins: pins,
         showUserDot: showUserDot,
         bottomPadding: bottomPadding,
+        focus: focus,
         onMapTap: onMapTap,
       );
     }
@@ -141,16 +214,29 @@ class MapBackdrop extends StatelessWidget {
       showUserDot: showUserDot,
       showAttribution: showAttribution,
       bottomPadding: bottomPadding,
+      focus: focus,
       onMapTap: onMapTap,
     );
   }
+}
+
+/// How long a focus move takes on either backend.
+const _flyDuration = Duration(milliseconds: 420);
+
+/// Latitude offset that lifts a point [pixels] logical pixels up the screen at
+/// [zoom]. Used where the map cannot be told about the sheet covering its
+/// bottom edge and the centring has to be faked in the coordinate itself.
+double _latLift(double lat, double zoom, double pixels) {
+  final metresPerPixel =
+      156543.03392 * math.cos(lat * math.pi / 180) / math.pow(2, zoom);
+  return pixels * metresPerPixel / 111320.0;
 }
 
 // ---------------------------------------------------------------------------
 // OpenStreetMap backend (default — no API key needed)
 // ---------------------------------------------------------------------------
 
-class _OsmBackdrop extends StatelessWidget {
+class _OsmBackdrop extends StatefulWidget {
   const _OsmBackdrop({
     required this.center,
     required this.zoom,
@@ -159,6 +245,7 @@ class _OsmBackdrop extends StatelessWidget {
     required this.showUserDot,
     required this.showAttribution,
     required this.bottomPadding,
+    required this.focus,
     required this.onMapTap,
   });
 
@@ -169,9 +256,85 @@ class _OsmBackdrop extends StatelessWidget {
   final bool showUserDot;
   final bool showAttribution;
   final double bottomPadding;
+  final MapFocus? focus;
   final VoidCallback? onMapTap;
 
   static const tileUrl = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+
+  @override
+  State<_OsmBackdrop> createState() => _OsmBackdropState();
+}
+
+/// flutter_map moves its camera in one jump, so the focus fly is tweened here:
+/// an [AnimationController] walks centre and zoom together and pushes each
+/// frame through [fm.MapController.move].
+class _OsmBackdropState extends State<_OsmBackdrop>
+    with SingleTickerProviderStateMixin {
+  final _map = fm.MapController();
+
+  late final AnimationController _fly = AnimationController(
+    vsync: this,
+    duration: _flyDuration,
+  )..addListener(_flyFrame);
+
+  /// The map's controller throws until the map has laid itself out once.
+  bool _ready = false;
+
+  LatLng _from = DemoPlace.taichung;
+  LatLng _to = DemoPlace.taichung;
+  double _fromZoom = 0;
+  double _toZoom = 0;
+
+  @override
+  void didUpdateWidget(covariant _OsmBackdrop oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.focus != null && widget.focus != oldWidget.focus) _startFly();
+  }
+
+  @override
+  void dispose() {
+    _fly.dispose();
+    _map.dispose();
+    super.dispose();
+  }
+
+  void _onMapReady() {
+    _ready = true;
+    if (widget.focus != null) _startFly();
+  }
+
+  void _startFly() {
+    if (!_ready) return;
+    final focus = widget.focus!;
+    final camera = _map.camera;
+    _from = camera.center;
+    _fromZoom = camera.zoom;
+    _toZoom = math.max(camera.zoom, focus.minZoom);
+
+    // Both ends of the tween have to be plain map centres, so the lift that
+    // holds the pin above the sheet is baked into the destination rather than
+    // handed to `move`'s offset — otherwise every fly would start with a jump
+    // of half the sheet's height as the offset was applied to a centre that
+    // already had it.
+    _to = LatLng(
+      focus.target.latitude -
+          _latLift(focus.target.latitude, _toZoom, widget.bottomPadding / 2),
+      focus.target.longitude,
+    );
+    _fly.forward(from: 0);
+  }
+
+  void _flyFrame() {
+    if (!_ready) return;
+    final t = Curves.easeInOutCubic.transform(_fly.value);
+    _map.move(
+      LatLng(
+        lerpDouble(_from.latitude, _to.latitude, t)!,
+        lerpDouble(_from.longitude, _to.longitude, t)!,
+      ),
+      lerpDouble(_fromZoom, _toZoom, t)!,
+    );
+  }
 
   /// Halves OSM's saturation and lifts it, landing close to Google Maps' light
   /// basemap: grey roads, muted green parks, muted blue water.
@@ -185,15 +348,17 @@ class _OsmBackdrop extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return fm.FlutterMap(
+      mapController: _map,
       options: fm.MapOptions(
-        initialCenter: center,
-        initialZoom: zoom,
+        initialCenter: widget.center,
+        initialZoom: widget.zoom,
         minZoom: 10,
         maxZoom: 18,
-        onTap: onMapTap == null ? null : (_, _) => onMapTap!(),
+        onMapReady: _onMapReady,
+        onTap: widget.onMapTap == null ? null : (_, _) => widget.onMapTap!(),
         backgroundColor: const Color(0xFFF0EFEA),
         interactionOptions: fm.InteractionOptions(
-          flags: interactive
+          flags: widget.interactive
               ? fm.InteractiveFlag.all & ~fm.InteractiveFlag.rotate
               : fm.InteractiveFlag.none,
         ),
@@ -202,7 +367,7 @@ class _OsmBackdrop extends StatelessWidget {
         ColorFiltered(
           colorFilter: _googleLikeFilter,
           child: fm.TileLayer(
-            urlTemplate: tileUrl,
+            urlTemplate: _OsmBackdrop.tileUrl,
             userAgentPackageName: 'tw.irent.pulse.demo',
             maxNativeZoom: 19,
             tileDisplay: const fm.TileDisplay.fadeIn(
@@ -210,37 +375,44 @@ class _OsmBackdrop extends StatelessWidget {
             ),
           ),
         ),
-        if (showUserDot)
+        if (widget.showUserDot)
           fm.MarkerLayer(
             markers: [
               fm.Marker(
-                point: center,
+                point: widget.center,
                 width: 26,
                 height: 26,
                 child: const _UserDot(),
               ),
             ],
           ),
-        if (pins.isNotEmpty)
+        if (widget.pins.isNotEmpty)
           fm.MarkerLayer(
             markers: [
-              for (final pin in pins)
+              // The selected pin is drawn last so it grows over its
+              // neighbours rather than under them.
+              for (final pin in [
+                ...widget.pins.where((p) => !p.selected),
+                ...widget.pins.where((p) => p.selected),
+              ])
                 fm.Marker(
                   point: pin.point,
-                  width: StationPin.width,
-                  height: StationPin.height,
+                  width: StationPin.width * pin.scale,
+                  height: StationPin.height * pin.scale,
                   alignment: Alignment.topCenter,
                   child: StationPin(
                     color: pin.color,
                     pro: pin.pro,
                     icon: pin.icon,
                     iconSize: pin.iconSize,
+                    selected: pin.selected,
                     onTap: pin.onTap,
                   ),
                 ),
             ],
           ),
-        if (showAttribution) _Attribution(bottomPadding: bottomPadding),
+        if (widget.showAttribution)
+          _Attribution(bottomPadding: widget.bottomPadding),
       ],
     );
   }
@@ -258,6 +430,7 @@ class _GoogleBackdrop extends StatefulWidget {
     required this.pins,
     required this.showUserDot,
     required this.bottomPadding,
+    required this.focus,
     required this.onMapTap,
   });
 
@@ -267,6 +440,7 @@ class _GoogleBackdrop extends StatefulWidget {
   final List<MapPin> pins;
   final bool showUserDot;
   final double bottomPadding;
+  final MapFocus? focus;
   final VoidCallback? onMapTap;
 
   @override
@@ -294,6 +468,8 @@ class _GoogleBackdropState extends State<_GoogleBackdrop> {
       '{"featureType":"transit","elementType":"labels","stylers":[{"visibility":"off"}]},'
       '{"featureType":"road","elementType":"labels.icon","stylers":[{"visibility":"off"}]}]';
 
+  gmap.GoogleMapController? _controller;
+
   @override
   void initState() {
     super.initState();
@@ -304,18 +480,57 @@ class _GoogleBackdropState extends State<_GoogleBackdrop> {
   void didUpdateWidget(covariant _GoogleBackdrop oldWidget) {
     super.didUpdateWidget(oldWidget);
     _ensureBitmaps();
+    if (widget.focus != null && widget.focus != oldWidget.focus) _fly();
+  }
+
+  void _onMapCreated(gmap.GoogleMapController controller) {
+    _controller = controller;
+    if (widget.focus != null) _fly();
+  }
+
+  /// Pulls the focused point into the middle of the map and leans in, without
+  /// ever backing out of a zoom the user has already dialled in.
+  Future<void> _fly() async {
+    final focus = widget.focus;
+    final controller = _controller;
+    if (focus == null || controller == null) return;
+
+    final current = await controller.getZoomLevel();
+    if (!mounted) return;
+    final zoom = math.max(current, focus.minZoom);
+
+    // Native honours GoogleMap.padding, so the camera already centres on the
+    // strip above the sheet; google_maps_flutter_web drops it, so on web the
+    // lift has to be baked into the target.
+    final lift = kIsWeb
+        ? _latLift(focus.target.latitude, zoom, widget.bottomPadding / 2)
+        : 0.0;
+
+    await controller.animateCamera(
+      gmap.CameraUpdate.newLatLngZoom(
+        gmap.LatLng(focus.target.latitude - lift, focus.target.longitude),
+        zoom,
+      ),
+      duration: _flyDuration,
+    );
   }
 
   /// Rasterises whatever the current pins need and is not cached yet. Anything
   /// already cached is picked up synchronously by [build], so switching mode or
   /// screen never drops the markers for a frame.
+  ///
+  /// Both selection states are rendered up front: a pin tap has to swap the
+  /// bubble on the same frame the sheet moves, and waiting on a rasterisation
+  /// there would blink the marker out.
   Future<void> _ensureBitmaps() async {
     var added = false;
     for (final pin in widget.pins) {
-      final key = _pinKey(pin);
-      if (_markerBitmaps.containsKey(key)) continue;
-      _markerBitmaps[key] = await _renderPinBitmap(pin);
-      added = true;
+      for (final variant in [pin, pin.withSelected(!pin.selected)]) {
+        final key = _pinKey(variant);
+        if (_markerBitmaps.containsKey(key)) continue;
+        _markerBitmaps[key] = await _renderPinBitmap(variant);
+        added = true;
+      }
     }
     if (widget.showUserDot && !_markerBitmaps.containsKey(_userDotKey)) {
       _markerBitmaps[_userDotKey] = await _renderUserDotBitmap();
@@ -352,7 +567,9 @@ class _GoogleBackdropState extends State<_GoogleBackdrop> {
           position: gmap.LatLng(pin.point.latitude, pin.point.longitude),
           icon: icon,
           anchor: _PinBitmap.anchor,
-          zIndexInt: i + 1,
+          // The selected pin is the tallest thing on the map, so it also has
+          // to be the topmost — otherwise its neighbours clip into it.
+          zIndexInt: pin.selected ? widget.pins.length + 1 : i + 1,
           // Otherwise a tap on a pin also reaches GoogleMap.onTap and the
           // screen closes the sheet the very tap just opened.
           consumeTapEvents: pin.onTap != null,
@@ -372,6 +589,7 @@ class _GoogleBackdropState extends State<_GoogleBackdrop> {
       ),
       style: _style,
       mapType: gmap.MapType.normal,
+      onMapCreated: _onMapCreated,
       markers: _markers,
       padding: EdgeInsets.only(bottom: widget.bottomPadding),
       compassEnabled: false,
@@ -398,7 +616,8 @@ final _markerBitmaps = <String, gmap.BitmapDescriptor>{};
 const _userDotKey = 'user-dot';
 
 String _pinKey(MapPin pin) =>
-    '${pin.color.toARGB32()}|${pin.pro}|${pin.icon?.codePoint}|${pin.iconSize}';
+    '${pin.color.toARGB32()}|${pin.pro}|${pin.icon?.codePoint}|'
+    '${pin.iconSize}|${pin.selected}';
 
 /// Geometry of a rasterised [StationPin].
 ///
@@ -427,13 +646,17 @@ class _PinBitmap {
 }
 
 Future<gmap.BitmapDescriptor> _renderPinBitmap(MapPin pin) {
+  // The whole bitmap scales with the pin, so [_PinBitmap.anchor] — a fraction
+  // of it — still lands on the teardrop's tip.
+  final scale = pin.scale;
   return _rasterise(
-    size: const Size(_PinBitmap.width, _PinBitmap.height),
+    size: Size(_PinBitmap.width * scale, _PinBitmap.height * scale),
     paint: (canvas) {
+      canvas.scale(scale);
       canvas.translate(_PinBitmap.padLeft, _PinBitmap.padTop);
       _PinPainter(
         color: pin.color,
-        filled: pin.icon == null,
+        filled: pin.icon == null || pin.selected,
       ).paint(canvas, const Size(StationPin.width, StationPin.height));
       if (pin.icon != null) _paintGlyph(canvas, pin);
       if (pin.pro) _paintProBadge(canvas);
@@ -470,7 +693,8 @@ void _paintGlyph(Canvas canvas, MapPin pin) {
         fontSize: pin.iconSize,
         fontFamily: icon.fontFamily,
         package: icon.fontPackage,
-        color: pin.color,
+        // Inverted on the selected pin: the bubble is now solid brand.
+        color: pin.selected ? Colors.white : pin.color,
         height: 1,
       ),
     ),
@@ -618,6 +842,7 @@ class StationPin extends StatelessWidget {
     this.pro = false,
     this.icon,
     this.iconSize = 17,
+    this.selected = false,
     this.onTap,
   });
 
@@ -628,11 +853,17 @@ class StationPin extends StatelessWidget {
   final bool pro;
   final IconData? icon;
   final double iconSize;
+
+  /// Focused pin: the bubble inverts to a solid brand fill with a white glyph,
+  /// and the whole teardrop grows.
+  final bool selected;
+
   final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    final filled = icon == null;
+    final filled = icon == null || selected;
+    final scale = selected ? MapPin.selectedScale : 1.0;
     final pin = SizedBox(
       width: width,
       height: height,
@@ -649,7 +880,11 @@ class StationPin extends StatelessWidget {
               left: 0,
               right: 0,
               top: (width - iconSize) / 2,
-              child: Icon(icon, size: iconSize, color: color),
+              child: Icon(
+                icon,
+                size: iconSize,
+                color: selected ? Colors.white : color,
+              ),
             ),
           if (pro)
             Positioned(
@@ -683,11 +918,31 @@ class StationPin extends StatelessWidget {
       ),
     );
 
-    if (onTap == null) return pin;
+    // The marker slot is already sized for the grown pin, so the artwork is
+    // scaled up inside it from the tip — the point the coordinate sits on.
+    final sized = scale == 1
+        ? pin
+        : Transform.scale(
+            scale: scale,
+            alignment: Alignment.bottomCenter,
+            // The marker hands down tight constraints for the grown box; the
+            // artwork itself has to stay at its natural size or it would be
+            // stretched and then scaled on top of that.
+            child: OverflowBox(
+              minWidth: 0,
+              maxWidth: width,
+              minHeight: 0,
+              maxHeight: height,
+              alignment: Alignment.bottomCenter,
+              child: pin,
+            ),
+          );
+
+    if (onTap == null) return sized;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: onTap,
-      child: pin,
+      child: sized,
     );
   }
 }

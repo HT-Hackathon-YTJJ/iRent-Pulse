@@ -1,0 +1,230 @@
+<svg viewBox="0 0 900 960" width="900" height="960" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="ttl desc">
+<title id="ttl">iRent 還車照片處理流程 v2</title>
+<desc id="desc">取車與還車皆拍照並經 L0 端上防呆。L1 為阻塞式單次呼叫，優先判定可判讀性，不合格即逐張退件要求重拍，重拍上限二至三次；同時比對車輛的文字車損紀錄找出紀錄外損傷，並分類車內整潔度。使用者當下僅收到照片是否合格與車內整潔度，車損結果不揭露。L2 僅在發現紀錄外損傷時觸發，調取車照做影像確認。L3 分為兩層：車輛狀態機自動決定車能不能租，僅有可租用、待清潔、停用三種狀態；除可租用外所有後續行動皆需人工，停用依 reason 欄位分流至客服複核或維修營運佇列。求償確認後必須同步更新車損紀錄，且只有人工結案後車輛才能回到可租用。</desc>
+
+<!-- ============================================================
+     配色（要改整體風格改這裡即可）
+       surface-1  #F7F7F5   一般流程方塊
+       surface-2  #EFEEEA   強調方塊（狀態機）
+       surface-0  #FFFFFF   輸出/註解方塊
+       border     #DDDBD4   淺邊框
+       border-str #C4C1B8   一般邊框
+       text       #1F1E1B / #55534C / #86837A
+       accent     #C55A2B   重點色
+       layer L0   #C55A2B   拍攝防呆
+       layer L1   #3B7A9E   快篩（阻塞）
+       layer L2   #4C8C5E   影像確認
+       layer L3   #7A5C99   決策派工
+       human      #B8860B   需人工介入
+     ============================================================ -->
+<defs>
+<marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+<path d="M0,1 L9,5 L0,9" fill="none" stroke="#86837A" stroke-width="1.6"/>
+</marker>
+<marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+<path d="M0,1 L9,5 L0,9" fill="none" stroke="#B8860B" stroke-width="1.8"/>
+</marker>
+<style>
+.pnl{fill:none;stroke:#DDDBD4;stroke-width:1;stroke-dasharray:5 4}
+.pl{font:600 12px system-ui,-apple-system,"PingFang TC","Noto Sans TC",sans-serif;fill:#C55A2B;letter-spacing:.04em}
+.bx{fill:#F7F7F5;stroke:#C4C1B8;stroke-width:1;rx:6}
+.out{fill:#FFFFFF;stroke:#DDDBD4;stroke-width:1;stroke-dasharray:4 3;rx:6}
+.hero{fill:#EFEEEA;stroke:#C55A2B;stroke-width:2;rx:7}
+.hum{fill:#FFFFFF;stroke:#B8860B;stroke-width:1.6;rx:6}
+.t{font:500 13px system-ui,-apple-system,"PingFang TC","Noto Sans TC",sans-serif;fill:#1F1E1B}
+.s{font:400 11px system-ui,-apple-system,"PingFang TC","Noto Sans TC",sans-serif;fill:#86837A}
+.a{font:500 12px system-ui,-apple-system,"PingFang TC","Noto Sans TC",sans-serif;fill:#55534C}
+.m{font:400 10px ui-monospace,SFMono-Regular,Menlo,monospace;fill:#B8860B}
+.ln{stroke:#86837A;stroke-width:1.4;fill:none;marker-end:url(#ar)}
+.lnh{stroke:#B8860B;stroke-width:1.6;fill:none;marker-end:url(#arw)}
+.lnj{stroke:#B8860B;stroke-width:1.6;fill:none}
+.badgeTxt{font:700 9px system-ui,-apple-system,"PingFang TC","Noto Sans TC",sans-serif;fill:#FFFFFF}
+.legend{font:500 11.5px system-ui,-apple-system,"PingFang TC","Noto Sans TC",sans-serif;fill:#55534C}
+</style>
+</defs>
+
+<rect x="0" y="0" width="900" height="960" fill="#FFFFFF"/>
+
+<!-- ===== 圖層圖例 ===== -->
+<g id="legend">
+<circle cx="30" cy="22" r="5" fill="#C55A2B"/>
+<text class="legend" x="40" y="26">L0 拍攝防呆</text>
+<circle cx="160" cy="22" r="5" fill="#3B7A9E"/>
+<text class="legend" x="170" y="26">L1 快篩（阻塞）</text>
+<circle cx="310" cy="22" r="5" fill="#4C8C5E"/>
+<text class="legend" x="320" y="26">L2 影像確認</text>
+<circle cx="440" cy="22" r="5" fill="#7A5C99"/>
+<text class="legend" x="450" y="26">L3 決策派工</text>
+<rect x="570" y="17" width="10" height="10" rx="2" fill="#B8860B"/>
+<text class="legend" x="586" y="26">需人工介入</text>
+</g>
+
+<!-- ===== 區段 0：取車階段 ===== -->
+<g id="panel-pickup">
+<rect class="pnl" x="20" y="44" width="860" height="112"/>
+<text class="pl" x="36" y="64">◎ 取車階段 · 核對車損紀錄是否為最新</text>
+
+<rect class="bx" x="36" y="82" width="120" height="56"/>
+<text class="t" x="96" y="107" text-anchor="middle">取車拍照</text>
+<text class="s" x="96" y="124" text-anchor="middle">車外 4 張</text>
+<rect x="36" y="73" width="26" height="14" rx="3" fill="#C55A2B"/>
+<text class="badgeTxt" x="49" y="83" text-anchor="middle">L0</text>
+<line class="ln" x1="156" y1="110" x2="176" y2="110"/>
+
+<rect class="bx" x="176" y="82" width="230" height="56"/>
+<text class="t" x="291" y="107" text-anchor="middle">L1：比對車損紀錄</text>
+<text class="s" x="291" y="124" text-anchor="middle">可判讀性＋紀錄外損傷</text>
+<rect x="176" y="73" width="26" height="14" rx="3" fill="#3B7A9E"/>
+<text class="badgeTxt" x="189" y="83" text-anchor="middle">L1</text>
+<line class="ln" x1="406" y1="110" x2="426" y2="110"/>
+
+<rect class="out" x="426" y="82" width="418" height="56"/>
+<text class="t" x="635" y="105" text-anchor="middle">紀錄外損傷 → 閒置期異常，不算任何用戶責任</text>
+<text class="s" x="635" y="123" text-anchor="middle">路由維修／營運佇列 · 這一步是在保護使用者</text>
+</g>
+
+<!-- ===== 區段一：還車現場（阻塞） ===== -->
+<g id="panel-onsite">
+<rect class="pnl" x="20" y="176" width="860" height="196"/>
+<text class="pl" x="36" y="196">① 還車現場 · 使用者等待 L1（約 7 秒，逐張回報）</text>
+
+<rect class="bx" x="36" y="214" width="120" height="60"/>
+<text class="t" x="96" y="239" text-anchor="middle">還車拍照</text>
+<text class="s" x="96" y="256" text-anchor="middle">車外 4＋車內 2</text>
+<rect x="36" y="205" width="26" height="14" rx="3" fill="#C55A2B"/>
+<text class="badgeTxt" x="49" y="215" text-anchor="middle">L0</text>
+<line class="ln" x1="156" y1="244" x2="176" y2="244"/>
+
+<rect class="bx" x="176" y="214" width="200" height="60"/>
+<text class="t" x="276" y="235" text-anchor="middle">L1 單次呼叫</text>
+<text class="s" x="276" y="252" text-anchor="middle">① 可判讀性（最優先）</text>
+<text class="s" x="276" y="266" text-anchor="middle">② 紀錄外損傷 ③ 整潔度</text>
+<rect x="176" y="205" width="26" height="14" rx="3" fill="#3B7A9E"/>
+<text class="badgeTxt" x="189" y="215" text-anchor="middle">L1</text>
+
+<!-- 不可判讀 → 退件重拍 -->
+<path class="lnh" d="M276 274 L276 302 L150 302 L150 258 L176 258"/>
+<rect class="hum" x="196" y="308" width="300" height="46"/>
+<text class="a" x="346" y="328" text-anchor="middle">不可判讀 → early return，當場退件重拍</text>
+<text class="s" x="346" y="345" text-anchor="middle">上限 2–3 次，超過即接受並轉停用</text>
+
+<line class="ln" x1="376" y1="244" x2="396" y2="244"/>
+<rect class="out" x="396" y="214" width="212" height="60"/>
+<text class="t" x="502" y="238" text-anchor="middle">使用者當下只收到</text>
+<text class="s" x="502" y="256" text-anchor="middle">照片是否合格・車內是否整潔</text>
+
+<rect class="out" x="628" y="214" width="216" height="60"/>
+<text class="t" x="736" y="238" text-anchor="middle">車損結果不揭露</text>
+<text class="s" x="736" y="256" text-anchor="middle">未經人複核前不指控使用者</text>
+</g>
+
+<!-- ===== 區段二：非同步 ===== -->
+<g id="panel-async">
+<rect class="pnl" x="20" y="388" width="860" height="140"/>
+<text class="pl" x="36" y="408">② 使用者離開後 · 非同步</text>
+
+<rect class="bx" x="36" y="424" width="150" height="72"/>
+<text class="t" x="111" y="452" text-anchor="middle">紀錄外損傷？</text>
+<text class="s" x="111" y="470" text-anchor="middle">同部位同類型</text>
+<text class="s" x="111" y="484" text-anchor="middle">預設視為既有</text>
+<line class="ln" x1="186" y1="460" x2="206" y2="460"/>
+
+<rect class="bx" x="206" y="424" width="240" height="72"/>
+<text class="t" x="326" y="452" text-anchor="middle">L2 影像確認</text>
+<text class="s" x="326" y="470" text-anchor="middle">調這趟取車照做對照</text>
+<text class="s" x="326" y="484" text-anchor="middle">僅 10–15% 會走到這裡</text>
+<rect x="206" y="415" width="26" height="14" rx="3" fill="#4C8C5E"/>
+<text class="badgeTxt" x="219" y="425" text-anchor="middle">L2</text>
+<line class="ln" x1="446" y1="460" x2="466" y2="460"/>
+
+<rect class="out" x="466" y="424" width="200" height="72"/>
+<text class="t" x="566" y="454" text-anchor="middle">新增／既有／無法判定</text>
+<text class="s" x="566" y="472" text-anchor="middle">三態輸出，不是二元</text>
+
+<rect class="out" x="686" y="424" width="158" height="72"/>
+<text class="t" x="765" y="447" text-anchor="middle">車內整潔度</text>
+<text class="s" x="765" y="465" text-anchor="middle">L1 即終判</text>
+<text class="s" x="765" y="481" text-anchor="middle">不需 L2</text>
+</g>
+
+<line class="ln" x1="566" y1="496" x2="566" y2="540"/>
+<line class="ln" x1="765" y1="496" x2="765" y2="540"/>
+
+<!-- ===== L3 ① 狀態機 ===== -->
+<g id="state-machine">
+<rect class="hero" x="36" y="540" width="808" height="58"/>
+<text class="t" x="440" y="564" text-anchor="middle">① 車輛狀態機 —— 自動</text>
+<text class="s" x="440" y="583" text-anchor="middle">只回答一個問題：這台車現在能不能租？保護性、可逆、不投入任何資源。</text>
+</g>
+<rect x="36" y="531" width="26" height="14" rx="3" fill="#7A5C99"/>
+<text class="badgeTxt" x="49" y="541" text-anchor="middle">L3</text>
+
+<line class="ln" x1="131" y1="598" x2="131" y2="636"/>
+<line class="ln" x1="341" y1="598" x2="341" y2="636"/>
+<line class="ln" x1="650" y1="598" x2="650" y2="636"/>
+
+<!-- 三種狀態 -->
+<g id="states">
+<rect class="bx" x="36" y="636" width="190" height="52"/>
+<text class="t" x="131" y="660" text-anchor="middle">可租用</text>
+<text class="s" x="131" y="677" text-anchor="middle">檢查全數通過</text>
+
+<rect class="bx" x="246" y="636" width="190" height="52"/>
+<text class="t" x="341" y="660" text-anchor="middle">待清潔</text>
+<text class="s" x="341" y="677" text-anchor="middle">已知解法・約 30 分鐘</text>
+
+<rect class="bx" x="456" y="636" width="388" height="52"/>
+<text class="t" x="650" y="660" text-anchor="middle">停用</text>
+<text class="s" x="650" y="677" text-anchor="middle">開放性問題・處理時間未知・依 reason 分流</text>
+</g>
+
+<!-- 分流 -->
+<line class="ln" x1="131" y1="688" x2="131" y2="720"/>
+<line class="lnh" x1="341" y1="688" x2="341" y2="720"/>
+<path class="lnj" d="M650 688 L650 702 L551 702"/>
+<path class="lnj" d="M650 702 L755 702"/>
+<line class="lnh" x1="551" y1="702" x2="551" y2="720"/>
+<line class="lnh" x1="755" y1="702" x2="755" y2="720"/>
+
+<!-- ===== L3 ② 行動層 ===== -->
+<g id="action-layer">
+<rect class="out" x="36" y="720" width="190" height="100"/>
+<text class="a" x="131" y="752" text-anchor="middle">自動開放下一位</text>
+<text class="s" x="131" y="772" text-anchor="middle">唯一不需人工的路徑</text>
+
+<rect class="hum" x="246" y="720" width="190" height="100"/>
+<text class="a" x="341" y="746" text-anchor="middle">清潔確認佇列</text>
+<text class="s" x="341" y="766" text-anchor="middle">人看過照片 → 一鍵派工</text>
+<text class="s" x="341" y="783" text-anchor="middle">秒級・量大</text>
+<text class="s" x="341" y="803" text-anchor="middle">分鐘級時效・最急</text>
+
+<rect class="hum" x="456" y="720" width="190" height="100"/>
+<text class="a" x="551" y="746" text-anchor="middle">客服複核佇列</text>
+<text class="m" x="551" y="764" text-anchor="middle">undetermined · unassessable</text>
+<text class="m" x="551" y="778" text-anchor="middle">system_error · new_damage</text>
+<text class="s" x="551" y="797" text-anchor="middle">審證據 → 求償／既有／誤報</text>
+<text class="s" x="551" y="812" text-anchor="middle">分鐘級・量小</text>
+
+<rect class="hum" x="666" y="720" width="178" height="100"/>
+<text class="a" x="755" y="746" text-anchor="middle">維修／營運佇列</text>
+<text class="m" x="755" y="764" text-anchor="middle">idle_anomaly</text>
+<text class="m" x="755" y="778" text-anchor="middle">new_damage</text>
+<text class="s" x="755" y="797" text-anchor="middle">判斷維修範圍 → 排程</text>
+<text class="s" x="755" y="812" text-anchor="middle">閒置異常不算用戶責任</text>
+</g>
+
+<text class="pl" x="400" y="846" text-anchor="middle">② 行動層 —— 除「可租用」外一律需人工</text>
+
+<!-- 回寫車損紀錄 + 解除停用 -->
+<!-- 客服複核：x=551 落在方塊 x 範圍(300..640)內，直接垂直進上緣 y=874 -->
+<line class="lnh" x1="551" y1="820" x2="551" y2="874"/>
+<!-- 維修／營運：x=755 在方塊右側外，繞下後由右緣 x=640 水平進入 -->
+<path class="lnh" d="M755 820 L755 900 L640 900"/>
+<rect class="hum" x="300" y="874" width="340" height="52"/>
+<text class="a" x="470" y="896" text-anchor="middle">更新車損紀錄</text>
+<text class="s" x="470" y="914" text-anchor="middle">與「確認求償」同一 transaction，不可跳過</text>
+
+<path class="lnh" d="M300 900 L28 900 L28 662 L36 662"/>
+<text class="s" x="44" y="906">人工結案後才可回「可租用」</text>
+<text class="s" x="660" y="948" text-anchor="middle">new_damage 同時進兩隊：維修處理車，客服處理錢</text>
+</svg>

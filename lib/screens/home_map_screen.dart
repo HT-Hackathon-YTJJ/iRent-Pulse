@@ -29,6 +29,10 @@ class _HomeMapScreenState extends State<HomeMapScreen>
     duration: const Duration(milliseconds: 240),
   );
 
+  /// How far the camera leans in on a tapped pin — a floor, so a user who has
+  /// already zoomed past it is not pulled back out.
+  static const _focusZoom = 16.0;
+
   RentMode _mode = RentMode.station;
   bool _car = true;
 
@@ -37,6 +41,10 @@ class _HomeMapScreenState extends State<HomeMapScreen>
   /// would rebuild underneath and the pins would jump.
   int? _pin;
 
+  /// The camera move the last selection asked for.
+  MapFocus? _focus;
+  int _focusSeq = 0;
+
   @override
   void dispose() {
     _swap.dispose();
@@ -44,16 +52,35 @@ class _HomeMapScreenState extends State<HomeMapScreen>
   }
 
   /// 同站租還 shows a red map-pin glyph inside the white bubble, 路邊租還 a red
-  /// car — exactly like the production app.
-  List<MapPin> get _pins =>
-      demoMapPins(station: _mode == RentMode.station, onTap: _selectPin);
+  /// car — exactly like the production app. The selected pin inverts to a
+  /// solid brand bubble so the map shows which card the deck is on.
+  List<MapPin> get _pins => demoMapPins(
+    station: _mode == RentMode.station,
+    selected: _pin,
+    onTap: _selectPin,
+  );
 
   /// A pin does not open the booking sheet directly: it first shows the cars
   /// it stands for as a swipeable deck (同站租還 → the station's fleet,
-  /// 路邊租還 → the closest road-side cars).
+  /// 路邊租還 → that car on the street).
   void _selectPin(int index) {
-    if (_pin != index) setState(() => _pin = index);
+    _focusOn(index);
     _swap.forward();
+  }
+
+  /// Follows the deck: swiping onto another pin's card selects that pin and
+  /// takes the camera with it, so the card and the marker never come apart.
+  void _focusOn(int index) {
+    setState(() {
+      _pin = index;
+      _focus = MapFocus(
+        target: demoPinLocation(index),
+        minZoom: _focusZoom,
+        // Re-tapping the pin you already have selected should still bring it
+        // back to the middle after you have panned away.
+        seq: ++_focusSeq,
+      );
+    });
   }
 
   void _closePin() {
@@ -124,6 +151,7 @@ class _HomeMapScreenState extends State<HomeMapScreen>
                   bottomPadding: showingPin
                       ? PinVehiclesSheet.collapsedHeight(bottomInset)
                       : 150 + bottomInset,
+                  focus: _focus,
                   onMapTap: _onMapTap,
                 ),
               ),
@@ -176,6 +204,7 @@ class _HomeMapScreenState extends State<HomeMapScreen>
                       key: _sheetKey,
                       mode: _mode,
                       pinIndex: _pin!,
+                      onPinChanged: _focusOn,
                       onClose: _closePin,
                     ),
                   ),

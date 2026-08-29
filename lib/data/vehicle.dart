@@ -655,21 +655,16 @@ String _plate(math.Random rng) {
   return '$letters-${1000 + rng.nextInt(9000)}';
 }
 
-/// The cars behind one map pin — the deck shown before the booking sheet.
+/// The cars behind one map pin.
 ///
 /// 同站租還 → the whole fleet parked at that station: 3–4 cars sharing the
 /// spot, the demo model throughout, with plates drawn from a generator seeded
 /// on the station name so a card keeps its plate across rebuilds.
 ///
-/// 路邊租還 → the car that was tapped first, then the closest other road-side
-/// cars, so the deck doubles as a "nearby" list.
+/// 路邊租還 → one pin is one car on the street, so that is the whole list; the
+/// neighbouring cars are the neighbouring pins' cards in [deckFor].
 List<VehicleListing> listingsAtPin(VehicleListing tapped) {
-  if (tapped.mode == RentMode.roadside) {
-    return [
-      tapped,
-      ...roadsideListings.where((l) => l.plate != tapped.plate).take(3),
-    ];
-  }
+  if (tapped.mode == RentMode.roadside) return [tapped];
 
   final rng = math.Random(tapped.address.hashCode);
   final count = 3 + rng.nextInt(2);
@@ -686,3 +681,46 @@ List<VehicleListing> listingsAtPin(VehicleListing tapped) {
       ),
   ];
 }
+
+/// Every card behind a mode's map pins, flattened in pin order.
+///
+/// One continuous deck rather than a fresh list per pin: tapping a pin then
+/// *slides* the deck to that pin's card instead of swapping the text out from
+/// under the card, and swiping the deck walks the map from pin to pin — the
+/// way Google Maps keeps its marker and its card carousel on the same item.
+class PinDeck {
+  const PinDeck._(this.cards, this._pinOfCard, this._firstCardOfPin);
+
+  final List<VehicleListing> cards;
+  final List<int> _pinOfCard;
+  final List<int> _firstCardOfPin;
+
+  /// Which pin the card at [card] belongs to.
+  int pinAt(int card) => _pinOfCard[card.clamp(0, _pinOfCard.length - 1)];
+
+  /// The card a tap on [pin] should land on — the first of that pin's group.
+  int cardAt(int pin) => _firstCardOfPin[pin % _firstCardOfPin.length];
+}
+
+PinDeck _buildDeck(RentMode mode) {
+  final cards = <VehicleListing>[];
+  final pinOfCard = <int>[];
+  final firstCardOfPin = <int>[];
+
+  final pins = listingsFor(mode);
+  for (var pin = 0; pin < pins.length; pin++) {
+    firstCardOfPin.add(cards.length);
+    for (final listing in listingsAtPin(pins[pin])) {
+      cards.add(listing);
+      pinOfCard.add(pin);
+    }
+  }
+  return PinDeck._(cards, pinOfCard, firstCardOfPin);
+}
+
+final _decks = <RentMode, PinDeck>{};
+
+/// Built once per mode: the station fleets are randomly sized, so rebuilding
+/// the deck would shuffle the card the user is looking at.
+PinDeck deckFor(RentMode mode) =>
+    _decks.putIfAbsent(mode, () => _buildDeck(mode));

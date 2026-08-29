@@ -17,16 +17,25 @@ import 'vehicle_booking_sheet.dart';
 /// own bottom block out for this, so the basemap never rebuilds and the pins
 /// never move under the user's finger.
 ///
-/// 同站租還 shows the fleet parked at that station, 路邊租還 the closest cars on
-/// the street. There is only ever **one** sheet on screen: collapsed it is a
-/// deck of swipeable cards, and pulling it up grows the booking content out
-/// from under the front card, which widens to fill the sheet. The two states
-/// are one layout interpolated by [_reveal], not two sheets stacked.
+/// The deck holds every pin's cards at once, in pin order — not just the
+/// tapped pin's. Tapping a pin therefore *slides* the deck across to that
+/// pin's card instead of swapping the card's contents out from underneath it,
+/// and swiping the deck sideways selects the pin that card belongs to. Marker
+/// and card stay on the same car in both directions, the way Google Maps pairs
+/// its pin with its carousel.
+///
+/// 同站租還 gives each pin the fleet parked at that station, 路邊租還 one card
+/// per car on the street. There is only ever **one** sheet on screen:
+/// collapsed it is a deck of swipeable cards, and pulling it up grows the
+/// booking content out from under the front card, which widens to fill the
+/// sheet. The two states are one layout interpolated by [_reveal], not two
+/// sheets stacked.
 class PinVehiclesSheet extends StatefulWidget {
   const PinVehiclesSheet({
     super.key,
     required this.mode,
     required this.pinIndex,
+    required this.onPinChanged,
     required this.onClose,
   });
 
@@ -35,6 +44,10 @@ class PinVehiclesSheet extends StatefulWidget {
   /// Which pin is selected. Kept as an index so the host's mode switch and its
   /// other pins stay live while the sheet is up.
   final int pinIndex;
+
+  /// The deck was swiped onto a card belonging to another pin. The host takes
+  /// the map with it — highlighting that pin and flying the camera over.
+  final ValueChanged<int> onPinChanged;
 
   /// The sheet wants to go away: the map was tapped while the deck was already
   /// collapsed, or the back button was pressed.
@@ -71,11 +84,23 @@ class PinVehiclesSheetState extends State<PinVehiclesSheet> {
   static const _openSize = 0.88;
   static const _maxSize = 0.94;
 
-  final _sheet = DraggableScrollableController();
-  final _pages = PageController(viewportFraction: _deckViewport);
+  /// How long the deck takes to slide onto a freshly tapped pin's card. Short:
+  /// it has to feel like the card came along with the map, not like a second
+  /// transition after it.
+  static const _slide = Duration(milliseconds: 260);
 
-  late List<VehicleListing> _cards = _cardsFor(widget.mode, widget.pinIndex);
-  int _index = 0;
+  final _sheet = DraggableScrollableController();
+
+  late PinDeck _deck;
+  late PageController _pages;
+
+  /// Index into [PinDeck.cards], not into the selected pin's cars.
+  late int _index;
+
+  /// True while [_slideToPin] drives the deck. [PageView.onPageChanged] fires
+  /// for pages crossed on the way, and reporting those back to the host would
+  /// drag the map across every pin in between.
+  bool _sliding = false;
 
   /// Collapsed sheet size as a fraction of the viewport. Set in [build] once
   /// the media query is known; [_reveal] reads it back.
@@ -84,23 +109,34 @@ class PinVehiclesSheetState extends State<PinVehiclesSheet> {
   @override
   void initState() {
     super.initState();
+    _deck = deckFor(widget.mode);
+    _index = _deck.cardAt(widget.pinIndex);
+    _pages = PageController(
+      viewportFraction: _deckViewport,
+      initialPage: _index,
+    );
     _sheet.addListener(_onSheetMoved);
   }
 
   @override
   void didUpdateWidget(covariant PinVehiclesSheet oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.mode == widget.mode &&
-        oldWidget.pinIndex == widget.pinIndex) {
+
+    if (oldWidget.mode != widget.mode) {
+      // A different deck entirely — there is no card to slide to.
+      setState(() {
+        _deck = deckFor(widget.mode);
+        _index = _deck.cardAt(widget.pinIndex);
+      });
+      if (_pages.hasClients) _pages.jumpToPage(_index);
+      collapse();
       return;
     }
-    // The host switched mode or moved to another pin without closing us.
-    setState(() {
-      _cards = _cardsFor(widget.mode, widget.pinIndex);
-      _index = 0;
-    });
-    if (_pages.hasClients) _pages.jumpToPage(0);
-    collapse();
+
+    // Already showing one of that pin's cars: the host is only echoing a swipe
+    // back at us, or the user re-tapped the pin they are looking at.
+    if (_deck.pinAt(_index) == widget.pinIndex) return;
+    _slideToPin(widget.pinIndex);
   }
 
   @override
@@ -115,12 +151,8 @@ class PinVehiclesSheetState extends State<PinVehiclesSheet> {
     if (mounted) setState(() {});
   }
 
-  List<VehicleListing> _cardsFor(RentMode mode, int pin) {
-    final pins = listingsFor(mode);
-    return listingsAtPin(pins[pin % pins.length]);
-  }
-
-  VehicleListing get _current => _cards[_index.clamp(0, _cards.length - 1)];
+  VehicleListing get _current =>
+      _deck.cards[_index.clamp(0, _deck.cards.length - 1)];
 
   /// 0 while the sheet is a deck of cards, 1 once it is fully open.
   double get _reveal {
@@ -183,14 +215,40 @@ class PinVehiclesSheetState extends State<PinVehiclesSheet> {
   /// A card that is not the front one comes to the front; the front one opens.
   void _onCardTap(int i) {
     if (i != _index) {
-      _pages.animateToPage(
-        i,
-        duration: const Duration(milliseconds: 240),
-        curve: Curves.easeOut,
-      );
+      _pages.animateToPage(i, duration: _slide, curve: Curves.easeOut);
     } else if (_reveal < 0.5) {
       _open();
     }
+  }
+
+  /// Runs the deck across to [pin]'s first card.
+  ///
+  /// A pin on the far side of the map can be twenty cards away, and scrubbing
+  /// through all of them would read as a blur rather than as a move, so a long
+  /// hop cuts to the neighbouring card first and only the last card's width is
+  /// actually animated. What the user sees either way is one card sliding in.
+  Future<void> _slideToPin(int pin) async {
+    final target = _deck.cardAt(pin);
+    if (!_pages.hasClients) {
+      setState(() => _index = target);
+      return;
+    }
+
+    _sliding = true;
+    if ((target - _index).abs() > 1) {
+      _pages.jumpToPage(target > _index ? target - 1 : target + 1);
+    }
+    await _pages.animateToPage(target, duration: _slide, curve: Curves.easeOut);
+    if (mounted) _sliding = false;
+  }
+
+  /// The deck settled on a new card. Everything below the card — the plate,
+  /// the address, the price — is already following [_index]; the map has to
+  /// follow it too, or the pin and the card drift apart.
+  void _onPageChanged(int i) {
+    setState(() => _index = i);
+    final pin = _deck.pinAt(i);
+    if (!_sliding && pin != widget.pinIndex) widget.onPinChanged(pin);
   }
 
   Future<void> _booked() async {
@@ -259,13 +317,13 @@ class PinVehiclesSheetState extends State<PinVehiclesSheet> {
           controller: controller,
           reveal: t,
           onBooked: _booked,
-          header: _deck(t, width, bottomInset),
+          header: _cardDeck(t, width, bottomInset),
         ),
       ),
     );
   }
 
-  Widget _deck(double t, double width, double bottomInset) {
+  Widget _cardDeck(double t, double width, double bottomInset) {
     final slot = width * _deckViewport;
     final cardWidth = lerpDouble(slot - _deckGap * 2, width, t)!;
 
@@ -282,8 +340,8 @@ class PinVehiclesSheetState extends State<PinVehiclesSheet> {
           // The front card grows wider than its page slot on the way up.
           clipBehavior: Clip.none,
           physics: const PageScrollPhysics(),
-          onPageChanged: (i) => setState(() => _index = i),
-          itemCount: _cards.length,
+          onPageChanged: _onPageChanged,
+          itemCount: _deck.cards.length,
           itemBuilder: (context, i) => Opacity(
             // The neighbours are gone before the front card has widened far
             // enough to reach into their slots.
@@ -298,7 +356,7 @@ class PinVehiclesSheetState extends State<PinVehiclesSheet> {
               child: SizedBox(
                 width: cardWidth,
                 child: _VehicleCard(
-                  listing: _cards[i],
+                  listing: _deck.cards[i],
                   carWidth: _carWidth(t),
                   padBottom: _cardPadBottom(t, bottomInset),
                   onTap: () => _onCardTap(i),
