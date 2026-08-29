@@ -50,6 +50,7 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.4
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
@@ -91,3 +92,21 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
+
+# App launcher icons. The sources in assets/icon/ are derived from
+# assets/icon/wordmark_source.png; to regenerate both stages:
+#   python3 tool/gen_app_icon.py assets/icon/wordmark_source.png
+#   dart run flutter_launcher_icons
+flutter_launcher_icons:
+  image_path: "assets/icon/icon.png"
+
+  ios: true
+  remove_alpha_ios: true # the App Store rejects icons with an alpha channel
+
+  android: "ic_launcher"
+  min_sdk_android: 21
+  # Adaptive icon: the foreground is sized to the 66dp safe circle of the
+  # 108dp canvas, so no letterform is clipped by any launcher mask shape.
+  adaptive_icon_background: "#D10211"
+  adaptive_icon_foreground: "assets/icon/icon_foreground.png"
+  adaptive_icon_monochrome: "assets/icon/icon_monochrome.png" # Android 13+ themed icons
