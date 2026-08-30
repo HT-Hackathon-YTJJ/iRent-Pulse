@@ -1,21 +1,38 @@
 import 'dart:async';
+import 'dart:io' show File;
+import 'dart:math' as math;
 
+import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
 import '../data/return_inspection.dart';
 import '../design/tokens.dart';
+import '../l0/aim.dart';
+import '../l0/capture_session.dart';
+import '../l0/permissions.dart';
+import '../services/return_session.dart';
 
-/// 車身拍照 / 車內裝 viewfinder (Figma 823:2794, 813:2257, 843:694).
+/// The seven-slot viewfinder, and the place L0 actually runs.
 ///
-/// The alignment verdict is produced *while the frame is live* — that is the
-/// whole point of the 防亂拍 design — so the badge, the centre pill and the
-/// ghost outline all read from one [AimState] that a detector owns. Until a
-/// real on-device model exists, [_AimSimulator] walks that state so the rest of
-/// the screen can be built and demoed against its final shape.
+/// Figma: 1019:1195 (拍照流程, the seven slots in order) and 1010:5678 /
+/// 823:2794 / 813:2257 for 未對準 / 接近 / 已對準.
 ///
-/// The shutter is never disabled. An off-target frame raises the 判定未達標
-/// panel, which still offers 仍要送出 — returning the car is never blocked.
+/// The alignment verdict is produced *while the frame is live*, which is the
+/// whole point of 防亂拍: the badge, the centre pill and the silhouette all
+/// read from one [AimVerdict] that [CaptureSession] computes off the camera's
+/// image stream — car bbox from a COCO SSD MobileNet, sharpness from a
+/// Laplacian, exposure from a luma histogram, and the torch from the same
+/// histogram.
+///
+/// Two rules this screen must never break:
+///
+/// * **The shutter is never disabled.** An off-target frame raises the 判定未達標
+///   panel, which still offers 仍要送出. A driver who cannot get a passing photo
+///   abandons the return, and that costs more than a mediocre photo.
+/// * **No camera is not a dead end.** On a desktop, on the web, or after a
+///   denied permission the screen falls back to the scripted still and the
+///   simulated verdict, so the flow can still be walked end to end.
 class ReturnCaptureScreen extends StatefulWidget {
   const ReturnCaptureScreen({
     super.key,
@@ -24,8 +41,12 @@ class ReturnCaptureScreen extends StatefulWidget {
     required this.pending,
     required this.onFinished,
     required this.onExit,
+    this.frames = const {},
+    this.onCaptured,
+    this.session,
     this.startMisaligned = false,
     this.onLongPressTitle,
+    this.onNoCamera,
   });
 
   /// Every slot in the strip, in strip order.
@@ -37,16 +58,33 @@ class ReturnCaptureScreen extends StatefulWidget {
   /// Slots this pass has to fill before the analysis runs.
   final Set<CaptureSpot> pending;
 
-  /// Fires once the last pending slot has a frame, or when 完成 is tapped.
+  /// Fires once the last pending slot has a frame.
   final VoidCallback onFinished;
 
   final VoidCallback onExit;
+
+  /// Photos already taken this return, per slot. A retake remounts this screen,
+  /// so the frames have to be handed back in or the filled tiles would drop to
+  /// the no-camera stand-in halfway through the flow.
+  final Map<CaptureSpot, File> frames;
+
+  /// Reports each frame as it is taken, so the flow can keep [frames] current.
+  final void Function(CaptureSpot spot, File file)? onCaptured;
+
+  /// Live L1 screening. Null (or not [ReturnSession.live]) runs the scripted
+  /// demo instead of calling the backend.
+  final ReturnSession? session;
 
   /// 情境⑥ opens with the frame off-target.
   final bool startMisaligned;
 
   /// Demo hook: long-pressing the header title opens the scenario picker.
   final VoidCallback? onLongPressTitle;
+
+  /// Fires once if the camera could not be opened. Live screening has nothing
+  /// to send in that case, so the flow drops back to the scripted board rather
+  /// than reporting a verdict on photos that were never taken.
+  final VoidCallback? onNoCamera;
 
   @override
   State<ReturnCaptureScreen> createState() => _ReturnCaptureScreenState();
@@ -60,19 +98,53 @@ const double _stripGap = 8;
 const double _tileRadius = 10.48;
 const double _shutterSize = 77.255;
 
+/// Clear space either side of the alignment silhouette.
+///
+/// Figma lets the silhouette run off the edge of the frame, which reads as
+/// "put the car half out of shot". The guide is what the driver is being asked
+/// to fill, so it has to be a shape they can actually fill — entirely on
+/// screen, with room to spare.
+const double _guideMargin = 24;
+
+/// How far the silhouette's tint carries. Enough to read over a bright white
+/// car in daylight, light enough to leave the frame underneath judgeable.
+const double _guideOpacity = 0.3;
+
+/// The outline is the part that has to survive a busy frame, so it is close to
+/// solid where the fill is a wash.
+const double _guideEdgeOpacity = 0.8;
+
+/// Top and bottom of the band the silhouette is centred in, measured from the
+/// safe-area top and the bottom edge. Keeps it clear of the 未對準 badge above
+/// and the hint pill below at any screen height.
+const double _guideBandTop = 145;
+const double _guideBandBottom = _stripBottom + _stripSize + 60;
+
 class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
     with SingleTickerProviderStateMixin {
   late final Set<CaptureSpot> _taken = {...widget.taken};
   late final Set<CaptureSpot> _pending = {...widget.pending};
   late CaptureSpot _current = _firstPending;
-  late final _AimSimulator _aim = _AimSimulator(
+
+  /// The photos behind the filled tiles, so the strip shows the driver's own
+  /// frames rather than a stand-in. [ReturnSession] keeps the same files for
+  /// the slots it screens; this map also covers the scripted runs, which have
+  /// no session behind them but still have a camera.
+  late final Map<CaptureSpot, File> _frames = {...widget.frames};
+
+  final CaptureSession _camera = CaptureSession();
+
+  /// Only used when there is no camera to read.
+  late final _AimSimulator _simulator = _AimSimulator(
     onChanged: (_) => setState(() {}),
     startMisaligned: widget.startMisaligned,
   );
 
   /// Non-null while the 判定未達標 panel is up.
   bool _reviewing = false;
-  bool _flashOn = false;
+
+  /// Guards against the auto-shutter firing twice on consecutive good frames.
+  bool _capturing = false;
 
   late final AnimationController _shutterFlash = AnimationController(
     vsync: this,
@@ -84,87 +156,177 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
     orElse: () => widget.spots.first,
   );
 
-  int get _takenCorners => _taken.where((s) => s.isCorner).length;
+  bool get _liveCamera => _camera.ready;
+
+  AimVerdict get _verdict =>
+      _liveCamera ? _camera.verdict : _simulator.verdict;
 
   @override
   void initState() {
     super.initState();
-    _aim.start();
+    _camera.addListener(_onCameraTick);
+    _simulator.start();
+    unawaited(_camera.start());
   }
 
   @override
   void dispose() {
-    _aim.dispose();
+    _camera.removeListener(_onCameraTick);
+    _camera.dispose();
+    _simulator.dispose();
     _shutterFlash.dispose();
     super.dispose();
   }
 
+  /// Guards [ReturnCaptureScreen.onNoCamera] against the per-frame tick.
+  bool _reportedNoCamera = false;
+
+  void _onCameraTick() {
+    if (!mounted) return;
+    setState(() {});
+    if (_camera.failure != CaptureFailure.none && !_reportedNoCamera) {
+      _reportedNoCamera = true;
+      widget.onNoCamera?.call();
+    }
+    // 連續確認 has been met — this is the automatic shutter the spec asks for.
+    // 情境⑥ deliberately never reaches it, because its frame never settles.
+    if (_liveCamera && !_reviewing && !_capturing && _camera.verdict.isAcceptable) {
+      unawaited(_capture(manual: false));
+    }
+  }
+
   void _onShutter() {
-    if (_reviewing) return;
-    if (_aim.state.isAcceptable) {
-      _capture();
+    if (_reviewing || _capturing) return;
+    if (_verdict.isAcceptable) {
+      unawaited(_capture(manual: false));
     } else {
       setState(() => _reviewing = true);
     }
   }
 
-  void _capture() {
+  /// [manual] is true when the driver overrode a failing check. It rides along
+  /// on the photo as `capture_mode: manual` / `bypassed`, and L1 tightens its
+  /// readability check on the strength of it.
+  Future<void> _capture({required bool manual}) async {
+    if (_capturing) return;
+    _capturing = true;
+    final spot = _current;
+
+    CapturedShot? shot;
+    if (_liveCamera) shot = await _camera.capture(manual: manual);
+    if (!mounted) {
+      _capturing = false;
+      return;
+    }
+
     _shutterFlash.forward(from: 0);
     setState(() {
       _reviewing = false;
-      _pending.remove(_current);
-      _taken.add(_current);
-      if (_pending.isEmpty) return;
-      _current = _firstPending;
-      _aim.restart();
+      _pending.remove(spot);
+      _taken.add(spot);
+      if (shot != null) _frames[spot] = shot.file;
     });
+    if (shot != null) widget.onCaptured?.call(spot, shot.file);
+
+    final session = widget.session;
+    if (shot != null && session != null && session.live) {
+      // Not awaited: the next slot opens immediately and L1 reports back per
+      // photo. That overlap is what makes a blocking screen bearable.
+      unawaited(session.submit(spot, shot));
+    }
+
     if (_pending.isEmpty) {
       // Let the shutter flash land before the page changes under it.
       Future<void>.delayed(const Duration(milliseconds: 260), () {
         if (mounted) widget.onFinished();
       });
+      return;
     }
+
+    setState(() => _current = _firstPending);
+    _camera.restartAim();
+    _simulator.restart();
+    _capturing = false;
   }
 
   void _retake() {
     setState(() => _reviewing = false);
-    _aim.restart();
+    _camera.restartAim();
+    _simulator.restart();
+  }
+
+  /// Where the alignment silhouette is painted, in logical pixels.
+  ///
+  /// The shape keeps its own aspect, is inset by [_guideMargin] on both sides,
+  /// and is centred in the band between the badge and the hint pill. On a short
+  /// screen the height runs out first and the width follows it down, so the
+  /// guide never grows into the chrome at either end.
+  Rect _guideRect(Size screen, double safeTop, CaptureSpot spot) {
+    final top = safeTop + _guideBandTop;
+    final bottom = math.max(top + 80, screen.height - _guideBandBottom);
+
+    var width = screen.width - _guideMargin * 2;
+    var height = width / spot.guideAspect;
+    if (height > bottom - top) {
+      height = bottom - top;
+      width = height * spot.guideAspect;
+    }
+    return Rect.fromLTWH(
+      (screen.width - width) / 2,
+      top + (bottom - top - height) / 2,
+      width,
+      height,
+    );
+  }
+
+  /// The same rect in screen-normalised coordinates, which is what the IoU
+  /// check needs. One source of truth: the overlap L0 scores is measured
+  /// against exactly the shape the driver is looking at.
+  Rect _guideOnScreen(Size screen, double safeTop, CaptureSpot spot) {
+    final rect = _guideRect(screen, safeTop, spot);
+    return Rect.fromLTRB(
+      rect.left / screen.width,
+      rect.top / screen.height,
+      rect.right / screen.width,
+      rect.bottom / screen.height,
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final media = MediaQuery.of(context);
     final safeTop = media.padding.top;
-    final aim = _aim.state;
+    final verdict = _verdict;
     final spot = _current;
+
+    if (_liveCamera) {
+      _camera.configure(
+        guideRect: _camera.frameRectFor(
+          _guideOnScreen(media.size, safeTop, spot),
+          media.size,
+        ),
+        requireGuide: spot.isCorner,
+      );
+    }
 
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
         fit: StackFit.expand,
         children: [
-          Image.asset(spot.viewfinderAsset, fit: BoxFit.cover),
+          if (_liveCamera)
+            _Preview(controller: _camera.controller!)
+          else
+            Image.asset(spot.viewfinderAsset, fit: BoxFit.cover),
 
-          // 對齊灰色輪廓線 — the guide only helps while the car is not yet
-          // framed, so it goes away as soon as the check reaches 接近. Figma
-          // hangs it at 198.78 of the 844pt frame, full-bleed.
-          if (aim == AimState.off && spot.isCorner)
-            Positioned(
-              left: 0,
-              right: 0,
-              top: media.size.height * (198.78 / 844),
-              child: Opacity(
-                // Figma composites a grey-on-grey still at 43%. The exported
-                // asset here is keyed to transparency instead, so the same
-                // contrast lands at a higher alpha — 43% on top of that would
-                // wash the guide out entirely.
-                opacity: 0.85,
-                child: Image.asset(
-                  '${_assetRoot}camera_ghost.png',
-                  fit: BoxFit.fitWidth,
-                ),
-              ),
-            ),
+          // The alignment silhouette. It stays up in every state and changes
+          // colour instead of disappearing — 灰 → 黃 → 綠 is the readout the
+          // driver is steering by, and taking it away the moment it starts
+          // working leaves them nothing to hold the frame against.
+          Positioned.fromRect(
+            rect: _guideRect(media.size, safeTop, spot),
+            child: _AimGuide(spot: spot, state: verdict.state),
+          ),
 
           const _Scrim(alignment: Alignment.topCenter, extent: 248),
           const _Scrim(alignment: Alignment.bottomCenter, extent: 272),
@@ -175,11 +337,8 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
             top: safeTop + 8,
             child: _TopBar(
               title: spot.screenTitle,
-              subtitle: _takenCorners == 0 || !spot.isCorner
-                  ? spot.instruction
-                  : '請拍攝其他照片（$_takenCorners/4）',
+              subtitle: spot.instruction,
               onBack: widget.onExit,
-              onDone: widget.onFinished,
               onLongPressTitle: widget.onLongPressTitle,
             ),
           ),
@@ -187,27 +346,43 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
           Positioned(
             left: 16,
             top: safeTop + 97,
-            child: _AimBadge(state: aim),
+            child: _AimBadge(state: verdict.state),
           ),
 
-          if (aim.hint != null && !_reviewing)
+          if (verdict.hint != null && !_reviewing)
             Positioned(
               left: 0,
               right: 0,
               bottom: _stripBottom + _stripSize + 35,
-              child: Center(child: _HintPill(text: aim.hint!)),
+              child: Center(child: _HintPill(text: verdict.hint!)),
             ),
 
           const Positioned(right: 16, bottom: 290, child: _ZoomCluster()),
 
-          if (_reviewing)
+          if (_camera.failure != CaptureFailure.none)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: _stripBottom + _stripSize + 140,
+              child: Center(
+                child: _CameraUnavailablePanel(
+                  message: _camera.failureDetail ?? '相機無法使用。',
+                  onOpenSettings: _camera.failure == CaptureFailure.permission
+                      ? CapturePermissions.openSettings
+                      : null,
+                  onRetry: () => unawaited(_camera.start()),
+                ),
+              )
+            )
+          else if (_reviewing)
             Positioned(
               left: 0,
               right: 0,
               bottom: _stripBottom + _stripSize + 140,
               child: Center(
                 child: _BelowStandardPanel(
-                  onSubmitAnyway: _capture,
+                  hint: verdict.hint,
+                  onSubmitAnyway: () => unawaited(_capture(manual: true)),
                   onRetake: _retake,
                 ),
               ),
@@ -220,7 +395,9 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
             child: _ShotStrip(
               spots: widget.spots,
               taken: _taken,
+              frames: _frames,
               current: _current,
+              session: widget.session,
             ),
           ),
 
@@ -228,8 +405,8 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
             left: 54,
             bottom: 90,
             child: _FlashButton(
-              on: _flashOn,
-              onTap: () => setState(() => _flashOn = !_flashOn),
+              on: _camera.torchOn,
+              onTap: () => unawaited(_camera.toggleTorch()),
             ),
           ),
 
@@ -273,11 +450,33 @@ const String _assetRoot = 'assets/images/return/';
 
 // ---------------------------------------------------------------------------
 
-/// Stands in for the on-device alignment check.
+/// The live feed, cropped to fill the way the Figma still does.
+class _Preview extends StatelessWidget {
+  const _Preview({required this.controller});
+
+  final CameraController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final preview = controller.value.previewSize;
+    if (preview == null) return const ColoredBox(color: Colors.black);
+    return FittedBox(
+      fit: BoxFit.cover,
+      child: SizedBox(
+        // previewSize is reported in the sensor's own orientation, so the two
+        // are swapped for the portrait viewfinder.
+        width: preview.height,
+        height: preview.width,
+        child: CameraPreview(controller),
+      ),
+    );
+  }
+}
+
+/// Stands in for the on-device check when there is no camera to read.
 ///
 /// It walks 未對準 → 接近 → 已對準 and then holds, which is the sequence the
-/// screens have to render; a real detector replaces [start]/[restart] without
-/// touching the widget tree.
+/// screens have to render on a desktop or on the web.
 class _AimSimulator {
   _AimSimulator({required this.onChanged, this.startMisaligned = false});
 
@@ -286,6 +485,12 @@ class _AimSimulator {
 
   AimState state = AimState.off;
   Timer? _timer;
+
+  AimVerdict get verdict => AimVerdict(
+    state: state,
+    hint: state.hint,
+    detectorAvailable: false,
+  );
 
   void start() {
     state = AimState.off;
@@ -344,14 +549,12 @@ class _TopBar extends StatelessWidget {
     required this.title,
     required this.subtitle,
     required this.onBack,
-    required this.onDone,
     this.onLongPressTitle,
   });
 
   final String title;
   final String subtitle;
   final VoidCallback onBack;
-  final VoidCallback onDone;
   final VoidCallback? onLongPressTitle;
 
   @override
@@ -380,21 +583,56 @@ class _TopBar extends StatelessWidget {
                   child: Text(title, style: ReturnText.cameraTitle),
                 ),
               ),
-              Positioned(
-                right: 17,
-                top: 3,
-                child: GestureDetector(
-                  onTap: onDone,
-                  behavior: HitTestBehavior.opaque,
-                  child: const Text('完成', style: ReturnText.cameraAction),
-                ),
-              ),
             ],
           ),
         ),
         const SizedBox(height: 5),
         Text(subtitle, style: ReturnText.cameraHint),
       ],
+    );
+  }
+}
+
+/// The car-shaped mask the driver lines the frame up with.
+///
+/// Two registered assets, both generated from the design repo's 72×72
+/// `slot_paint_*.png` by `tool/gen_slot_assets.py`: a filled silhouette and its
+/// outline. The blur baked into them is what stops a 19× enlargement arriving
+/// as a staircase, and `srcIn` keeps that alpha while swapping the colour — so
+/// one pair of assets covers all three states and the change between them can
+/// be tweened.
+///
+/// The outline is not decoration. A flat wash at [_guideOpacity] vanishes
+/// against a bright wall, which is the background 未對準 has to survive.
+class _AimGuide extends StatelessWidget {
+  const _AimGuide({required this.spot, required this.state});
+
+  final CaptureSpot spot;
+  final AimState state;
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          _tinted(spot.guideAsset, state.guideColor, _guideOpacity),
+          _tinted(spot.guideEdgeAsset, state.guideEdgeColor, _guideEdgeOpacity),
+        ],
+      ),
+    );
+  }
+
+  Widget _tinted(String asset, Color target, double opacity) {
+    return TweenAnimationBuilder<Color?>(
+      duration: const Duration(milliseconds: 240),
+      tween: ColorTween(end: target),
+      builder: (context, color, _) => Image.asset(
+        asset,
+        fit: BoxFit.fill,
+        color: (color ?? target).withValues(alpha: opacity),
+        colorBlendMode: BlendMode.srcIn,
+      ),
     );
   }
 }
@@ -522,76 +760,170 @@ class _FlashButton extends StatelessWidget {
   }
 }
 
-/// The 72pt frame strip. It runs 392pt wide at five slots, which is why the
-/// design lets it bleed past the screen edges rather than shrinking the tiles.
+/// The 72pt frame strip: shot slots to the left of the active tile, still-empty
+/// ones to the right.
+///
+/// Seven tiles are 552pt wide, so the strip is a rail rather than a row that
+/// fits. The design pins the active tile to the centre line of the screen and
+/// slides the rail under it, which means the driver's eye never has to hunt for
+/// what they are shooting — it is always in the same place, with their own
+/// finished photos trailing off one side.
 class _ShotStrip extends StatelessWidget {
   const _ShotStrip({
     required this.spots,
     required this.taken,
+    required this.frames,
     required this.current,
+    this.session,
   });
 
   final List<CaptureSpot> spots;
   final Set<CaptureSpot> taken;
+  final Map<CaptureSpot, File> frames;
   final CaptureSpot current;
+  final ReturnSession? session;
 
   @override
   Widget build(BuildContext context) {
-    return ClipRect(
+    // OverflowBox centres the rail, so this is the distance from the rail's own
+    // middle tile to the active one.
+    final index = math.max(0, spots.indexOf(current));
+    final shift =
+        ((spots.length - 1) / 2 - index) * (_stripSize + _stripGap);
+
+    final strip = ClipRect(
       child: SizedBox(
         height: _stripSize,
-        child: OverflowBox(
-          maxWidth: double.infinity,
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              for (final spot in spots) ...[
-                _Tile(
-                  spot: spot,
-                  captured: taken.contains(spot),
-                  active: spot == current,
-                ),
-                if (spot != spots.last) const SizedBox(width: _stripGap),
+        child: TweenAnimationBuilder<double>(
+          tween: Tween<double>(end: shift),
+          duration: const Duration(milliseconds: 320),
+          curve: Curves.easeOutCubic,
+          builder: (context, dx, child) =>
+              Transform.translate(offset: Offset(dx, 0), child: child),
+          child: OverflowBox(
+            maxWidth: double.infinity,
+            alignment: Alignment.center,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final spot in spots) ...[
+                  _Tile(
+                    spot: spot,
+                    captured: taken.contains(spot),
+                    active: spot == current,
+                    frame: session?.statusOf(spot).file ?? frames[spot],
+                    status: session?.statusOf(spot),
+                  ),
+                  if (spot != spots.last) const SizedBox(width: _stripGap),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       ),
     );
+
+    // 逐張回報: the strip is where L1's per-photo answers land, so it has to
+    // rebuild as they arrive rather than once at the end.
+    final live = session;
+    if (live == null) return strip;
+    return AnimatedBuilder(animation: live, builder: (_, _) => strip);
   }
 }
 
+/// One slot in the strip, in one of the three states the design calls out:
+///
+/// * **shot** — the frame the driver actually took, full-bleed, no ring. Never
+///   the `slot_real_*` composite from the design repo: those are mock-ups, and
+///   showing one where a real photo belongs would misreport what was captured.
+/// * **active** — the indicator artwork inside a white ring.
+/// * **still to come** — the same indicator, no ring.
 class _Tile extends StatelessWidget {
   const _Tile({
     required this.spot,
     required this.captured,
     required this.active,
+    this.frame,
+    this.status,
   });
 
   final CaptureSpot spot;
   final bool captured;
   final bool active;
 
+  /// The photo taken for this slot, once there is one.
+  final File? frame;
+
+  final SlotStatus? status;
+
   @override
   Widget build(BuildContext context) {
+    final file = frame;
     return Container(
       width: _stripSize,
       height: _stripSize,
       decoration: BoxDecoration(
-        color: captured ? null : const Color(0x807C7F84),
+        color: captured && file != null ? null : const Color(0x807C7F84),
         borderRadius: BorderRadius.circular(_tileRadius),
         border: active ? Border.all(color: Colors.white, width: 2) : null,
       ),
       clipBehavior: Clip.antiAlias,
-      child: captured
-          ? Image.asset(spot.shotAsset, fit: BoxFit.cover)
-          : Center(
-              child: SizedBox(
-                width: 55,
-                height: 37,
-                child: Image.asset(spot.placeholderAsset, fit: BoxFit.contain),
-              ),
-            ),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          if (file != null)
+            Image.file(file, fit: BoxFit.cover)
+          else if (captured)
+            // No camera behind this run, so there is no real frame to show.
+            Image.asset(spot.shotAsset, fit: BoxFit.cover)
+          else
+            Image.asset(spot.slotIcon, fit: BoxFit.contain),
+          if (status != null && status!.phase != SlotPhase.empty)
+            Positioned(right: 3, bottom: 3, child: _SlotBadge(phase: status!.phase)),
+        ],
+      ),
+    );
+  }
+}
+
+/// ⏳ / ✓ / ✗ per slot — the whole point of reporting one photo at a time.
+class _SlotBadge extends StatelessWidget {
+  const _SlotBadge({required this.phase});
+
+  final SlotPhase phase;
+
+  @override
+  Widget build(BuildContext context) {
+    final (Color color, Widget child) = switch (phase) {
+      SlotPhase.screening => (
+        const Color(0xCC000000),
+        const SizedBox(
+          width: 10,
+          height: 10,
+          child: CircularProgressIndicator(strokeWidth: 1.6, color: Colors.white),
+        ),
+      ),
+      SlotPhase.passed => (
+        AppColor.aimLocked,
+        const Icon(Icons.check, size: 12, color: Colors.white),
+      ),
+      SlotPhase.retake => (
+        AppColor.aimNear,
+        const Icon(Icons.refresh, size: 12, color: Colors.white),
+      ),
+      SlotPhase.failed => (
+        AppColor.aimOff,
+        const Icon(Icons.cloud_off, size: 11, color: Colors.white),
+      ),
+      SlotPhase.empty => (Colors.transparent, const SizedBox.shrink()),
+    };
+
+    return Container(
+      width: 18,
+      height: 18,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+      child: child,
     );
   }
 }
@@ -601,10 +933,79 @@ class _BelowStandardPanel extends StatelessWidget {
   const _BelowStandardPanel({
     required this.onSubmitAnyway,
     required this.onRetake,
+    this.hint,
   });
 
   final VoidCallback onSubmitAnyway;
   final VoidCallback onRetake;
+
+  /// Whatever L0 is actually unhappy about, so the panel says something useful
+  /// instead of only "未達標".
+  final String? hint;
+
+  @override
+  Widget build(BuildContext context) {
+    return _GlassPanel(
+      title: '判定未達標',
+      body: hint == null
+          ? '照片已保留，仍可送出（不阻擋還車）。完成拍攝可獲得本次駕駛獎勵金。'
+          : '$hint。照片已保留，仍可送出（不阻擋還車）。',
+      actions: [
+        _PanelAction(label: '仍要送出', onTap: onSubmitAnyway, filled: false),
+        _PanelAction(label: '重拍這張', onTap: onRetake, filled: true),
+      ],
+    );
+  }
+}
+
+/// Shown instead of the live feed when there is no camera to open.
+class _CameraUnavailablePanel extends StatelessWidget {
+  const _CameraUnavailablePanel({
+    required this.message,
+    required this.onRetry,
+    this.onOpenSettings,
+  });
+
+  final String message;
+  final VoidCallback onRetry;
+  final VoidCallback? onOpenSettings;
+
+  @override
+  Widget build(BuildContext context) {
+    return _GlassPanel(
+      title: '無法開啟相機',
+      body: '$message\n仍可依畫面指示完成還車流程。',
+      actions: [
+        if (onOpenSettings != null)
+          _PanelAction(label: '前往設定', onTap: onOpenSettings!, filled: false),
+        _PanelAction(label: '重試', onTap: onRetry, filled: true),
+      ],
+    );
+  }
+}
+
+class _PanelAction {
+  const _PanelAction({
+    required this.label,
+    required this.onTap,
+    required this.filled,
+  });
+
+  final String label;
+  final VoidCallback onTap;
+  final bool filled;
+}
+
+class _GlassPanel extends StatelessWidget {
+  const _GlassPanel({
+    required this.title,
+    required this.body,
+    required this.actions,
+  });
+
+  final String title;
+  final String body;
+  final List<_PanelAction> actions;
 
   @override
   Widget build(BuildContext context) {
@@ -620,18 +1021,18 @@ class _BelowStandardPanel extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Text(
-            '判定未達標',
-            style: TextStyle(
+          Text(
+            title,
+            style: const TextStyle(
               fontSize: 16.468,
               fontWeight: FontWeight.w700,
               color: Colors.white,
             ),
           ),
           const SizedBox(height: 9),
-          const Text(
-            '照片已保留，仍可送出（不阻擋還車）。完成拍攝可獲得本次駕駛獎勵金。',
-            style: TextStyle(
+          Text(
+            body,
+            style: const TextStyle(
               fontSize: 14.971,
               height: 21.333 / 14.971,
               color: AppColor.glassBody,
@@ -640,21 +1041,10 @@ class _BelowStandardPanel extends StatelessWidget {
           const SizedBox(height: 13),
           Row(
             children: [
-              Expanded(
-                child: _panelButton(
-                  label: '仍要送出',
-                  onTap: onSubmitAnyway,
-                  filled: false,
-                ),
-              ),
-              const SizedBox(width: 9),
-              Expanded(
-                child: _panelButton(
-                  label: '重拍這張',
-                  onTap: onRetake,
-                  filled: true,
-                ),
-              ),
+              for (final action in actions) ...[
+                Expanded(child: _panelButton(action)),
+                if (action != actions.last) const SizedBox(width: 9),
+              ],
             ],
           ),
         ],
@@ -662,30 +1052,28 @@ class _BelowStandardPanel extends StatelessWidget {
     );
   }
 
-  Widget _panelButton({
-    required String label,
-    required VoidCallback onTap,
-    required bool filled,
-  }) {
+  Widget _panelButton(_PanelAction action) {
     return GestureDetector(
-      onTap: onTap,
+      onTap: action.onTap,
       behavior: HitTestBehavior.opaque,
       child: Container(
         height: 44.912,
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: filled ? Colors.white : Colors.transparent,
-          border: filled
+          color: action.filled ? Colors.white : Colors.transparent,
+          border: action.filled
               ? null
               : Border.all(color: AppColor.glassGhostRing, width: 2.994),
           borderRadius: BorderRadius.circular(_tileRadius),
         ),
         child: Text(
-          label,
+          action.label,
           style: TextStyle(
             fontSize: 14.971,
             fontWeight: FontWeight.w700,
-            color: filled ? AppColor.glassSolidLabel : AppColor.glassGhostLabel,
+            color: action.filled
+                ? AppColor.glassSolidLabel
+                : AppColor.glassGhostLabel,
           ),
         ),
       ),

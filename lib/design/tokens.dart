@@ -60,8 +60,17 @@ class AppColor {
   // than being folded into the semantic names above.
   static const aimOff = Color(0xFF4A4E49); // 未對準
   static const aimNear = Color(0xFFE8A33D); // 接近
-  static const aimLocked = Color(0xFF289632); // 已對準
+  static const aimLocked = Color(0xFF1E9E5A); // 已對準
   static const zoomActive = Color(0xFFF8CB58);
+
+  /// 未對準 fill of the alignment silhouette. Deliberately not [aimOff]: the
+  /// badge sits on the header scrim and can be dark, the silhouette sits on
+  /// whatever the camera is pointed at and has to read as a light haze there.
+  static const guideOff = Color(0xFFDCDFDC);
+
+  /// Stroke around that same silhouette while 未對準. Darker than the fill so
+  /// the outline the hint pill points at ("對齊灰色輪廓線") survives a white wall.
+  static const guideOffEdge = Color(0xFF5F645F);
 
   /// Amber advisory block under a result headline.
   static const noteAmber = Color(0xFFD4A82C);

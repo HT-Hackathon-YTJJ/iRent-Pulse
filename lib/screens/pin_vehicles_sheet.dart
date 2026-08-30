@@ -111,11 +111,20 @@ class PinVehiclesSheetState extends State<PinVehiclesSheet> {
     super.initState();
     _deck = deckFor(widget.mode);
     _index = _deck.cardAt(widget.pinIndex);
-    _pages = PageController(
-      viewportFraction: _deckViewport,
-      initialPage: _index,
-    );
+    _pages = _controllerAt(_index);
     _sheet.addListener(_onSheetMoved);
+  }
+
+  /// A deck controller opened on [page].
+  ///
+  /// [replacing] is disposed after the frame that swaps it out: it is still
+  /// attached to the PageView being rebuilt, and disposing it here would take
+  /// the position out from under that build.
+  PageController _controllerAt(int page, {PageController? replacing}) {
+    if (replacing != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => replacing.dispose());
+    }
+    return PageController(viewportFraction: _deckViewport, initialPage: page);
   }
 
   @override
@@ -127,8 +136,19 @@ class PinVehiclesSheetState extends State<PinVehiclesSheet> {
       setState(() {
         _deck = deckFor(widget.mode);
         _index = _deck.cardAt(widget.pinIndex);
+        // Not a jumpToPage: that would run against the PageView as it stands
+        // *now*, which is still the old deck — 路邊租還 has one card per pin
+        // and 同站租還 three or four, so the card we want is routinely past
+        // the end of the list the controller is still attached to. A fresh
+        // controller opens on the right page instead of scrolling to it.
+        //
+        // The PageView is keyed on the mode for the same reason: handed a new
+        // controller alone it absorbs the old scroll position and carries the
+        // old pixel offset straight over, ignoring `initialPage` — page 7 of
+        // the road-side deck would silently become card 7 of the station one,
+        // which belongs to an entirely different pin.
+        _pages = _controllerAt(_index, replacing: _pages);
       });
-      if (_pages.hasClients) _pages.jumpToPage(_index);
       collapse();
       return;
     }
@@ -336,6 +356,7 @@ class PinVehiclesSheetState extends State<PinVehiclesSheet> {
       child: IgnorePointer(
         ignoring: t > 0.5,
         child: PageView.builder(
+          key: ValueKey(widget.mode),
           controller: _pages,
           // The front card grows wider than its page slot on the way up.
           clipBehavior: Clip.none,

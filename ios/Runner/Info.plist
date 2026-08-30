@@ -2,6 +2,17 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- 還車拍照：相機是硬需求，定位用來標記還車地點（可拒絕，不擋還車）。 -->
+	<key>NSCameraUsageDescription</key>
+	<string>拍攝還車照片，並在拍攝當下即時檢查構圖、清晰度與光線。</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>標記取車與還車的位置，並在地圖上顯示附近的站點。</string>
+	<!-- api/ 在 demo 時跑本機明文 HTTP；正式環境改用 HTTPS 後可整段移除。 -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>

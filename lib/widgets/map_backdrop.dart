@@ -470,10 +470,22 @@ class _GoogleBackdropState extends State<_GoogleBackdrop> {
 
   gmap.GoogleMapController? _controller;
 
+  /// Last known camera zoom, kept here rather than asked for at the moment of
+  /// the tap: `getZoomLevel()` is a platform round trip, and awaiting one
+  /// before calling [gmap.GoogleMapController.animateCamera] left the map
+  /// sitting still for a beat after the pin had already lit up. Refreshed
+  /// whenever the camera settles, which covers the user pinching the map.
+  late double _zoom = widget.zoom;
+
   @override
   void initState() {
     super.initState();
     _ensureBitmaps();
+  }
+
+  Future<void> _syncZoom() async {
+    final zoom = await _controller?.getZoomLevel();
+    if (zoom != null) _zoom = zoom;
   }
 
   @override
@@ -485,19 +497,23 @@ class _GoogleBackdropState extends State<_GoogleBackdrop> {
 
   void _onMapCreated(gmap.GoogleMapController controller) {
     _controller = controller;
+    _zoom = widget.zoom;
     if (widget.focus != null) _fly();
   }
 
   /// Pulls the focused point into the middle of the map and leans in, without
   /// ever backing out of a zoom the user has already dialled in.
-  Future<void> _fly() async {
+  ///
+  /// Deliberately synchronous up to the `animateCamera` call: the tap that
+  /// gets us here also lights the pin up and slides the deck, and the camera
+  /// has to leave in the same frame as those or the three come apart.
+  void _fly() {
     final focus = widget.focus;
     final controller = _controller;
     if (focus == null || controller == null) return;
 
-    final current = await controller.getZoomLevel();
-    if (!mounted) return;
-    final zoom = math.max(current, focus.minZoom);
+    final zoom = math.max(_zoom, focus.minZoom);
+    _zoom = zoom;
 
     // Native honours GoogleMap.padding, so the camera already centres on the
     // strip above the sheet; google_maps_flutter_web drops it, so on web the
@@ -506,7 +522,7 @@ class _GoogleBackdropState extends State<_GoogleBackdrop> {
         ? _latLift(focus.target.latitude, zoom, widget.bottomPadding / 2)
         : 0.0;
 
-    await controller.animateCamera(
+    controller.animateCamera(
       gmap.CameraUpdate.newLatLngZoom(
         gmap.LatLng(focus.target.latitude - lift, focus.target.longitude),
         zoom,
@@ -522,17 +538,28 @@ class _GoogleBackdropState extends State<_GoogleBackdrop> {
   /// Both selection states are rendered up front: a pin tap has to swap the
   /// bubble on the same frame the sheet moves, and waiting on a rasterisation
   /// there would blink the marker out.
+  ///
+  /// In two passes, though. What is on screen now goes up as soon as it is
+  /// ready; the appearance a tap would switch *to* is warmed afterwards, so
+  /// stocking the cache never delays the pins the user is waiting for. The
+  /// cache is keyed by appearance rather than by pin, so a field of eight pins
+  /// costs a handful of renders, once per session.
   Future<void> _ensureBitmaps() async {
+    await _render(widget.pins, withUserDot: widget.showUserDot);
+    await _render([
+      for (final pin in widget.pins) pin.withSelected(!pin.selected),
+    ]);
+  }
+
+  Future<void> _render(List<MapPin> pins, {bool withUserDot = false}) async {
     var added = false;
-    for (final pin in widget.pins) {
-      for (final variant in [pin, pin.withSelected(!pin.selected)]) {
-        final key = _pinKey(variant);
-        if (_markerBitmaps.containsKey(key)) continue;
-        _markerBitmaps[key] = await _renderPinBitmap(variant);
-        added = true;
-      }
+    for (final pin in pins) {
+      final key = _pinKey(pin);
+      if (_markerBitmaps.containsKey(key)) continue;
+      _markerBitmaps[key] = await _renderPinBitmap(pin);
+      added = true;
     }
-    if (widget.showUserDot && !_markerBitmaps.containsKey(_userDotKey)) {
+    if (withUserDot && !_markerBitmaps.containsKey(_userDotKey)) {
       _markerBitmaps[_userDotKey] = await _renderUserDotBitmap();
       added = true;
     }
@@ -590,6 +617,9 @@ class _GoogleBackdropState extends State<_GoogleBackdrop> {
       style: _style,
       mapType: gmap.MapType.normal,
       onMapCreated: _onMapCreated,
+      // Cheaper than onCameraMove, which streams a message per frame: the
+      // only thing we need back is the zoom the camera came to rest at.
+      onCameraIdle: _syncZoom,
       markers: _markers,
       padding: EdgeInsets.only(bottom: widget.bottomPadding),
       compassEnabled: false,

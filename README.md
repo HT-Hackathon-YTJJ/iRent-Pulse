@@ -2,7 +2,7 @@
 
 🔮 iRent 智能車況管家 — 和泰黑客松作品。以 Flutter 復刻 iRent App 主要頁面，並在其上實作四項改善功能。
 
-目前已完成：**主要頁面骨架** + **功能一「安心上路輔助」完整流程**。
+目前已完成：**主要頁面骨架** + **功能一「安心上路輔助」完整流程** + **功能四「還車拍照偵測」L0–L3 全鏈路**。
 
 ---
 
@@ -10,7 +10,14 @@
 
 ```bash
 flutter pub get
-flutter run            # 接上手機 / 模擬器
+./tool/fetch_l0_model.sh   # 下載 L0 的車體偵測模型（4 MB，不進版控）
+flutter run                # 接上手機 / 模擬器
+```
+
+還車拍照要跑真的 AI 檢測時，另開一個終端機起後端：
+
+```bash
+api/run.sh
 ```
 
 Web 版（適合投影 Demo）：
@@ -74,8 +81,12 @@ lib/
 ├─ design/tokens.dart          # 色彩／圓角／陰影／字級 semantic token
 ├─ data/vehicle.dart           # 車款資料：規格、啟動步驟、五個分區的圖說內容與標記座標
 ├─ config/                     # 地圖金鑰開關與 Web 版 Maps JS 動態載入
+├─ l0/                         # 還車拍照的端上檢查：相機、車體偵測、清晰度／曝光、閃光燈
+├─ services/                   # 呼叫 api/ 的 L1／L2／L3，以及一次還車的逐張狀態
 ├─ widgets/                    # PillButton、深色 Sheet、車輛標頭、地圖底圖與 Pin
 └─ screens/                    # 上表所有畫面
+
+api/                           # L1／L2／L3 的 Python 後端，見 api/README.md
 ```
 
 設計 token 對應 `docs/design-tokens.md` 與 Figma
@@ -149,6 +160,92 @@ CI 之類不方便放檔案的環境，仍可用 `--dart-define-from-file=.env` 
 
 ---
 
+## 還車拍照偵測（功能四）
+
+`docs/return-car-docs/分層規格書_v1.md` 的四層，端上一層、伺服器三層：
+
+| 層 | 問題 | 位置 | 檔案 |
+|---|---|---|---|
+| **L0 拍攝防呆** | 這張照片拍好了嗎？ | 手機，每一幀 | `lib/l0/` |
+| **L1 快篩** | 能判讀嗎？看得到車損嗎？車內乾淨嗎？ | 伺服器，**阻塞** | `api/app/l1.py` |
+| **L2 影像確認** | 這個損傷是這趟造成的嗎？ | 伺服器，非同步 | `api/app/l2.py` |
+| **L3 決策派工** | 車輛該進什麼狀態？誰要行動？ | 規則引擎，非 AI | `api/app/l3.py` |
+
+伺服器三層的說明在 [`api/README.md`](api/README.md)。以下是端上這一層。
+
+### L0 在手機上真的做了什麼
+
+`ReturnCaptureScreen` 開的是真的相機，每一幀都在算：
+
+| 檢查 | 方法 | 檔案 |
+|---|---|---|
+| 車體存在 + 畫面佔比 | COCO SSD MobileNet v1（TFLite）的 `car`／`truck`／`bus` bbox | `l0/car_detector.dart` |
+| 完整性（四邊留白） | 同一個 bbox 是否貼齊畫面邊界 | `l0/aim.dart` |
+| 清晰度 | 亮度平面的 Laplacian variance | `l0/frame_analysis.dart` |
+| 曝光 | 亮度直方圖的過曝／過暗像素比 | `l0/frame_analysis.dart` |
+| 匡線對齊 | bbox 與畫面上灰色輪廓線的 IoU（純幾何，不是模型） | `l0/aim.dart` |
+| 連續確認 | 上述全過連續 5 幀才觸發快門 | `l0/aim.dart` |
+| **自動閃光燈** | 同一份直方圖：連續 8 幀偏暗就自己開，亮回來 24 幀才關 | `l0/capture_session.dart` |
+
+Android 拿到的是 YUV420、iOS 是 BGRA8888，兩邊都不解碼整張圖——
+清晰度與曝光直接讀亮度平面，偵測用的 300×300 張量在取樣時順便把感光元件的
+旋轉轉正，所以模型吐出來的框已經是螢幕方向的座標。
+
+**快門永遠不會被鎖住。** 不合格只會跳「判定未達標」，仍然可以「仍要送出」，
+那張照片會帶 `capture_mode: manual`／`bypassed` 上去讓 L1 加強檢查。
+15 秒後門檻自動放寬 20%，30 秒後直接開放手動快門——
+使用者站在停車場快門就是不觸發而放棄還車，代價遠大於一張品質普通的照片。
+
+沒跑 `tool/fetch_l0_model.sh` 也不會壞：少了車體偵測，
+清晰度與曝光照常擋，只是「車體存在／畫面佔比／匡線對齊」三項會略過。
+沒有相機（桌機、Web、權限被拒）則整個退回原本的腳本情境。
+
+測試：
+
+```bash
+flutter test          # L0 的純運算、逐張回報狀態機、無相機時的取景器
+api/run.sh & api/.venv/bin/python -m pytest api/tests -q   # L3 規則表
+```
+
+`test/l0_test.dart` 釘住清晰度／曝光／旋轉取樣與門檻放寬，
+`test/return_session_test.dart` 用假的 L1 回應把逐張回報與 issue 文案跑過一遍，
+`test/return_capture_widget_test.dart` 確認沒有相機時取景器照樣能走完。
+
+### 權限
+
+| 平台 | 相機 | 定位 | 說明 |
+|---|---|---|---|
+| Android | `AndroidManifest.xml` | 同左 | 另有 `FLASHLIGHT`；`network_security_config.xml` 只對本機開發位址開明文 HTTP |
+| iOS | `NSCameraUsageDescription` | `NSLocationWhenInUseUsageDescription` | Podfile 只編 `PERMISSION_CAMERA` 與 `PERMISSION_LOCATION` 兩個處理程式 |
+
+執行期用 `permission_handler` 一次要齊。**相機是唯一硬需求**；
+定位被拒絕不擋還車，只是還車地點標不準。
+
+### 取車照片：目前還沒接
+
+L2 要回答「這個損傷是這趟造成的嗎」，靠的是同一台車、同一個角度的**取車照**做集合差。
+App 現在的取車流程沒有拍照這一步，所以真實模式下 L2 一律只能回「無法判定」，
+由 L3 轉「停用（`undetermined`）」——這是規格書要的保守行為，不是壞掉。
+
+後端本身已經吃得下取車照（`stage=pickup`），要看完整的三態判定可以先用腳本灌基準線：
+
+```bash
+api/.venv/bin/python api/scripts/demo_trip.py \
+  --pickup 左前=取車_左前.jpg --return 左前=還車_左前.jpg
+```
+
+### 真實模式 vs 腳本情境
+
+進還車流程時會先探測 `api/` 是否活著（`/healthz`，3 秒逾時）：
+
+* **探得到** → 情境 ⓪「真實 AI 檢測」：相機跑 L0，每拍完一張立刻送 L1，
+  分析頁逐張回報（`左前 ✓ 右前 ✓ 左後 ⏳`），離開頁面時才跑 L2／L3。
+* **探不到** → 原本 Figma 板上的六個腳本情境照跑，一行程式都不會動到。
+
+長按取景器標題可以隨時切換，Demo 現場網路掛掉也不會開天窗。
+
+---
+
 ## 尚未實作
 
-功能二「信用點數優化」、功能三「借車流程優化」、功能四「拍照偵測」。
+功能二「信用點數優化」、功能三「借車流程優化」。

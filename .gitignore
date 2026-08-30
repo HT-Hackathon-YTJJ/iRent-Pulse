@@ -43,6 +43,9 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+# Gradle 的根專案輸出。app 的產物由上面的 /build/ 涵蓋，但根專案自己會在
+# android/build/ 底下留報告。
+/android/build/
 
 # Widget Preview related
 .widget_preview/

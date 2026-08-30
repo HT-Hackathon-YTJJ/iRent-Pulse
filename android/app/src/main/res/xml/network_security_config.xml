@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  api/ 在開發時跑的是明文 HTTP，而 Android 9 起預設擋掉明文流量。
+  這裡只對本機開發位址開例外，正式環境走 HTTPS 時不需要動這個檔。
+
+    10.0.2.2   Android 模擬器看到的主機 loopback
+    localhost  裝置本機
+
+  實機連同一個 Wi-Fi 上的筆電時，把那台機器的私有 IP 加進下面的清單，
+  或直接用 dart-define 把 API_BASE_URL 指到一個 https 位址。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false"/>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">10.0.2.2</domain>
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+    </domain-config>
+</network-security-config>

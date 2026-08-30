@@ -1,5 +1,20 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 還車拍照（L0 端上防呆）與地圖／還車定位所需的權限。
+         相機是唯一的硬需求；定位被拒絕不會擋住還車流程。 -->
+    <uses-permission android:name="android.permission.CAMERA"/>
+    <uses-permission android:name="android.permission.FLASHLIGHT"/>
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <uses-permission android:name="android.permission.INTERNET"/>
+
+    <!-- required="false"：沒有相機或沒有閃光燈的裝置仍可安裝，
+         畫面會退回無相機的流程。 -->
+    <uses-feature android:name="android.hardware.camera" android:required="false"/>
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false"/>
+    <uses-feature android:name="android.hardware.camera.flash" android:required="false"/>
+
     <application
+        android:networkSecurityConfig="@xml/network_security_config"
         android:label="iRent Pulse"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">

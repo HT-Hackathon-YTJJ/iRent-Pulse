@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../data/return_inspection.dart';
 import '../design/tokens.dart';
+import '../services/return_session.dart';
 import '../widgets/return_footer.dart';
 
 /// 還車分析中 → 還車分析完成 (Figma 825:3149, 827:4377, 830:5248).
@@ -16,10 +17,17 @@ class ReturnAnalysisScreen extends StatefulWidget {
     super.key,
     required this.analysis,
     required this.onContinue,
+    this.session,
   });
 
   final ReturnAnalysis analysis;
   final VoidCallback onContinue;
+
+  /// Live L1 screening. When present the page settles on the *answers*, not on
+  /// a timer — and it shows the per-photo row while it waits, because a single
+  /// spinner over six parallel calls is what makes 26% of drivers feel they are
+  /// waiting on the slowest one.
+  final ReturnSession? session;
 
   @override
   State<ReturnAnalysisScreen> createState() => _ReturnAnalysisScreenState();
@@ -61,12 +69,19 @@ class _ReturnAnalysisScreenState extends State<ReturnAnalysisScreen>
     return Scaffold(
       backgroundColor: Colors.white,
       body: AnimatedBuilder(
-        animation: _run,
+        animation: widget.session == null
+            ? _run
+            : Listenable.merge([_run, widget.session]),
         builder: (context, _) {
           // Each bar settles on its own clock; the page turns over once the
           // slower of the two lands.
-          final photoDone = _photo.value >= 1;
-          final cabinDone = _cabin.value >= 1;
+          final live = widget.session;
+          // Wait on work that is actually in flight. Waiting on "no answers
+          // yet" instead would hang this page forever in the one case where
+          // nothing was ever uploaded.
+          final waitingOnL1 = live != null && live.anyScreening;
+          final photoDone = _photo.value >= 1 && !waitingOnL1;
+          final cabinDone = _cabin.value >= 1 && !waitingOnL1;
           final settled = photoDone && cabinDone;
 
           return Column(
@@ -118,6 +133,10 @@ class _ReturnAnalysisScreenState extends State<ReturnAnalysisScreen>
                               progress: _cabin.value,
                               settled: cabinDone,
                             ),
+                            if (live != null) ...[
+                              const SizedBox(height: 16),
+                              _PerPhotoRow(session: live),
+                            ],
                             const SizedBox(height: 19),
                             _Footnote(settled: settled),
                           ],
@@ -145,6 +164,86 @@ class _ReturnAnalysisScreenState extends State<ReturnAnalysisScreen>
             ],
           );
         },
+      ),
+    );
+  }
+}
+
+/// 逐張回報 — 左前 ✓ 右前 ✓ 左後 ⏳ 右後 ✗.
+///
+/// A rejected frame can be retaken while the others are still in flight, which
+/// turns a serial wait into an overlapping one.
+class _PerPhotoRow extends StatelessWidget {
+  const _PerPhotoRow({required this.session});
+
+  final ReturnSession session;
+
+  @override
+  Widget build(BuildContext context) {
+    final spots = session.reportedSpots;
+    if (spots.isEmpty) return const SizedBox.shrink();
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      alignment: WrapAlignment.center,
+      children: [
+        for (final spot in spots) _PhotoChip(spot: spot, status: session.statusOf(spot)),
+      ],
+    );
+  }
+}
+
+class _PhotoChip extends StatelessWidget {
+  const _PhotoChip({required this.spot, required this.status});
+
+  final CaptureSpot spot;
+  final SlotStatus status;
+
+  @override
+  Widget build(BuildContext context) {
+    final (Color color, Widget mark) = switch (status.phase) {
+      SlotPhase.passed => (
+        AppColor.successText,
+        const Icon(Icons.check, size: 13, color: AppColor.successText),
+      ),
+      SlotPhase.retake => (
+        AppColor.aimNear,
+        const Icon(Icons.refresh, size: 13, color: AppColor.aimNear),
+      ),
+      SlotPhase.failed => (
+        AppColor.textMuted,
+        const Icon(Icons.cloud_off, size: 13, color: AppColor.textMuted),
+      ),
+      _ => (
+        AppColor.textProcessing,
+        const SizedBox(
+          width: 11,
+          height: 11,
+          child: CircularProgressIndicator(
+            strokeWidth: 1.6,
+            color: AppColor.textProcessing,
+          ),
+        ),
+      ),
+    };
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: AppColor.divider),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            spot.label,
+            style: TextStyle(fontSize: 13, height: 1.2, color: color),
+          ),
+          const SizedBox(width: 6),
+          mark,
+        ],
       ),
     );
   }

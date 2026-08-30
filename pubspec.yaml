@@ -40,6 +40,15 @@ dependencies:
   web: ^1.1.1
   flutter_svg: ^2.3.0
 
+  # 還車拍照（L0 端上防呆 + L1/L2 後端）
+  camera: ^0.12.0            # 預覽、影像串流、手電筒
+  # 釘在 12.x：13.x 的 permission_handler_android 宣告 compileSdk 37，
+  # 但 Android SDK 已改成帶次版號的 android-37.0／37.1，沒有純 android-37
+  # 這個 target，AGP 找不到就整包編不起來。12.x 用 compileSdk 35，API 相同。
+  permission_handler: ^12.0.3 # 相機／定位執行期權限
+  tflite_flutter: ^0.12.0    # COCO SSD MobileNet，端上找車體 bbox
+  http: ^1.6.0               # 呼叫 api/ 的 L1 / finalize
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -66,6 +75,13 @@ flutter:
   assets:
     - assets/images/
     - assets/images/return/
+    # Strip indicators and alignment silhouettes, both built by
+    # tool/gen_slot_assets.py from the design repo's slot_paint_*.png.
+    - assets/images/return/slots/
+    - assets/images/return/guide/
+    # L0 的車體偵測模型。tool/fetch_l0_model.sh 下載，.gitignore 排除 *.tflite，
+    # 所以 clone 之後要跑一次那支腳本；沒有模型時 L0 會退回純運算檢查。
+    - assets/models/
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

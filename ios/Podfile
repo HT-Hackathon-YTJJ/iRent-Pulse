@@ -39,5 +39,15 @@ end
 post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
+
+    # permission_handler 預設會把所有權限的處理程式都編進來，連帶把用不到的
+    # 權限字串帶進 App Store 審查。這裡只留還車拍照真正會用到的兩項。
+    target.build_configurations.each do |config|
+      config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] ||= [
+        '$(inherited)',
+        'PERMISSION_CAMERA=1',
+        'PERMISSION_LOCATION=1',
+      ]
+    end
   end
 end
