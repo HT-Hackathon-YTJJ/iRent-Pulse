@@ -95,7 +95,125 @@ class InspectionApi {
     return L3Decision.fromJson(json);
   }
 
+  // -- 車輛歷程留言板 --------------------------------------------------------
+  //
+  // The board is L2's second source of evidence. It answers 「是這趟造成的嗎」
+  // in the case a pickup photo cannot: the previous driver wrote down the dent
+  // before this driver ever saw the car. `api/app/board.py` has the full
+  // argument, including the rule that a note may only ever move a finding
+  // towards 既有 — never towards a charge.
+  //
+  // The board already exists in the app: it is the 租用履歷 tab of the booking
+  // sheet, `VehicleProfile.reviews`. Those entries are local demo data, so
+  // [ReturnSession.publishBoard] pushes them to the service when a live return
+  // starts — which is what makes the sentence the driver read on the booking
+  // screen the same sentence L2 weighs half an hour later.
+  //
+  // What is still missing is the *write* half: there is no screen where a
+  // driver types a note. [addNote] is here for it, and 還車完成 is where it
+  // goes — the moment somebody has just walked around the car is the moment
+  // they know what is wrong with it.
+
+  /// What the board already said about this car.
+  ///
+  /// [before] is an ISO-8601 cut-off. Pass the moment the rental started to get
+  /// what L2 will see; omit it to show the driver everything.
+  Future<List<BoardNote>> notes({
+    required String carNo,
+    String? before,
+  }) async {
+    final uri = _uri('/v1/cars/$carNo/notes').replace(
+      queryParameters: before == null ? null : {'before': before},
+    );
+    final response = await _client.get(uri);
+    if (response.statusCode != 200) {
+      throw InspectionApiException(
+        'notes ${response.statusCode}: ${response.body}',
+      );
+    }
+    final list = jsonDecode(utf8.decode(response.bodyBytes)) as List<Object?>;
+    return [
+      for (final item in list)
+        BoardNote.fromJson(item as Map<String, Object?>),
+    ];
+  }
+
+  /// Write one entry. [part] and [type] are optional — the service parses them
+  /// out of [text] when the UI has not tagged them.
+  Future<BoardNote> addNote({
+    required String carNo,
+    required String text,
+    String? orderId,
+    String? createdAt,
+    String? part,
+    String? type,
+  }) async {
+    final response = await _client.post(
+      _uri('/v1/cars/$carNo/notes'),
+      headers: const {'content-type': 'application/json; charset=utf-8'},
+      body: utf8.encode(
+        jsonEncode({
+          'text': text,
+          'author': 'user',
+          'created_at': ?createdAt,
+          'order_id': ?orderId,
+          'part': ?part,
+          'type': ?type,
+        }),
+      ),
+    );
+    if (response.statusCode != 200) {
+      throw InspectionApiException(
+        'addNote ${response.statusCode}: ${response.body}',
+      );
+    }
+    return BoardNote.fromJson(
+      jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, Object?>,
+    );
+  }
+
   void close() => _client.close();
+}
+
+/// One entry on a car's 車輛歷程留言板.
+class BoardNote {
+  const BoardNote({
+    required this.noteId,
+    required this.text,
+    required this.author,
+    required this.createdAt,
+    this.part,
+    this.type,
+    this.confirmed = false,
+  });
+
+  final String noteId;
+  final String text;
+  final String author; // user / staff / system
+  final String createdAt;
+
+  /// Filled in when the note named a panel the vision layers also speak of.
+  /// Null is normal — most notes are not about damage.
+  final String? part;
+  final String? type;
+
+  /// True once 客服 has looked. Only a confirmed note is allowed to contradict
+  /// a pickup photograph, and even then it asks for a human rather than
+  /// deciding.
+  final bool confirmed;
+
+  /// True when this note can actually take part in an L2 comparison.
+  bool get actionable => part != null && type != null;
+
+  factory BoardNote.fromJson(Map<String, Object?> json) => BoardNote(
+    noteId: json['note_id'] as String? ?? '',
+    text: json['text'] as String? ?? '',
+    author: json['author'] as String? ?? 'user',
+    createdAt: json['created_at'] as String? ?? '',
+    part: json['part'] as String?,
+    type: json['type'] as String?,
+    confirmed: json['confirmed'] as bool? ?? false,
+  );
 }
 
 class InspectionApiException implements Exception {

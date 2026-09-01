@@ -125,8 +125,12 @@ void main() {
     // Fills 54% of the frame, well clear of every edge.
     final wellFramed = Rect.fromLTRB(0.12, 0.22, 0.88, 0.94);
 
-    AimEvaluator evaluator({Rect? guide}) =>
-        AimEvaluator(guideRect: guide)..restart();
+    AimEvaluator evaluator({Rect? guide, bool allowsEdge = false}) =>
+        AimEvaluator(guideRect: guide, guideAllowsEdge: allowsEdge)..restart();
+
+    /// The evaluator ages its detections, so every test drives its own clock
+    /// rather than letting the wall clock decide whether a box is still fresh.
+    final epoch = DateTime(2026, 1, 1);
 
     AimVerdict run(
       AimEvaluator e, {
@@ -134,6 +138,7 @@ void main() {
       Detection? detection,
       bool requireGuide = true,
       int frames = 1,
+      DateTime? at,
     }) {
       late AimVerdict verdict;
       for (var i = 0; i < frames; i++) {
@@ -142,6 +147,7 @@ void main() {
           car: detection,
           detectorAvailable: true,
           requireGuide: requireGuide,
+          now: at ?? epoch,
         );
       }
       return verdict;
@@ -150,7 +156,7 @@ void main() {
     test('an empty frame is 未對準 and points at the outline', () {
       final verdict = run(evaluator(), detection: null);
       expect(verdict.state, AimState.off);
-      expect(verdict.hint, '對齊灰色輪廓線');
+      expect(verdict.hint, '對齊輪廓線');
     });
 
     test('a soft frame is called out before anything about framing', () {
@@ -223,27 +229,153 @@ void main() {
       expect(armed.hint, isNull);
     });
 
-    test('one bad frame resets the streak', () {
+    test('a frame the detector skipped does not reset the streak', () {
+      // Inference runs at 5Hz over a 30Hz stream, so most frames arrive with
+      // no detection at all. Treating those as "no car" is what used to make
+      // the badge strobe between 未對準 and 已對準 on a phone held still.
       final e = evaluator();
-      run(e, detection: car(wellFramed), frames: e.holdFrames - 1);
-      final dropped = run(e, detection: null);
-      expect(dropped.streak, 0);
-      final next = run(e, detection: car(wellFramed));
-      expect(next.streak, 1);
-      expect(next.isAcceptable, isFalse);
+      final built = run(e, detection: car(wellFramed), frames: e.holdFrames - 1);
+      expect(built.streak, e.holdFrames - 1);
+
+      final skipped = run(e, detection: null);
+      expect(skipped.streak, e.holdFrames);
+      expect(skipped.isAcceptable, isTrue);
     });
 
-    test('a car that misses the guide outline is held at 接近', () {
-      final e = evaluator(guide: const Rect.fromLTRB(0.07, 0.3, 1.0, 0.61));
-      // Big enough and clear of every edge, but sitting below the outline —
-      // so only the IoU check can reject it.
+    test('a detection that has gone stale does reset it', () {
+      // The other half of the same rule: the last box cannot stand in for ever,
+      // or a viewfinder swung away from the car keeps reporting 已對準 from a
+      // frame that is long gone.
+      final e = evaluator();
+      run(e, detection: car(wellFramed), frames: e.holdFrames);
+
+      final later = epoch.add(AimEvaluator.staleAfter * 2);
+      final dropped = run(e, detection: null, at: later);
+      expect(dropped.streak, 0);
+      expect(dropped.state, AimState.off);
+      expect(dropped.hint, '對齊輪廓線');
+    });
+
+    test('one genuinely bad frame resets the streak', () {
+      final e = evaluator();
+      run(e, detection: car(wellFramed), frames: e.holdFrames - 1);
+      final dropped = run(
+        e,
+        stats: const FrameStats(
+          blurScore: 2,
+          overExposed: 0,
+          underExposed: 0,
+          meanLuma: 130,
+        ),
+        detection: car(wellFramed),
+      );
+      expect(dropped.streak, 0);
+    });
+
+    // The guide the four body slots are scored against, in the same upright
+    // normalised space the detector reports boxes in.
+    const guide = Rect.fromLTRB(0.06, 0.34, 0.94, 0.80);
+
+    test('a car the right size but off the outline is 未對準, not 接近', () {
+      // This is the case a single IoU could not tell apart from a centred car
+      // that was simply too small — and telling the driver to walk forward
+      // when the problem is that they are aimed at the wrong part of the car
+      // sends them the wrong way.
+      final e = evaluator(guide: guide);
       final verdict = run(
         e,
-        detection: car(const Rect.fromLTRB(0.05, 0.55, 0.95, 0.975)),
+        detection: car(const Rect.fromLTRB(0.06, 0.52, 0.94, 0.98)),
       );
-      expect(verdict.coverage, greaterThan(const AimThresholds().minCoverage));
-      expect(verdict.iou, lessThan(const AimThresholds().minIou));
-      expect(verdict.hint, '對齊灰色輪廓線');
+      expect(verdict.fill, closeTo(1, 0.05), reason: '大小其實是對的');
+      expect(verdict.drift, greaterThan(const AimThresholds().maxDrift));
+      expect(verdict.state, AimState.off);
+      expect(verdict.hint, '對齊輪廓線');
+    });
+
+    test('a car centred on the outline but too small is 接近 with a direction', () {
+      final e = evaluator(guide: guide);
+      final verdict = run(
+        e,
+        detection: car(const Rect.fromLTRB(0.36, 0.47, 0.64, 0.67)),
+      );
+      expect(verdict.drift, lessThan(const AimThresholds().maxDrift));
+      expect(verdict.fill, lessThan(const AimThresholds().minFill));
+      expect(verdict.state, AimState.near);
+      expect(verdict.hint, '再靠近一點');
+    });
+
+    test('a car overflowing the outline is asked to step back', () {
+      final e = evaluator(guide: guide, allowsEdge: true);
+      final verdict = run(
+        e,
+        detection: car(const Rect.fromLTRB(0.0, 0.2, 1.0, 0.95)),
+      );
+      expect(verdict.fill, greaterThan(const AimThresholds().maxFill));
+      expect(verdict.hint, '請再退後一步');
+    });
+
+    test('a car filling the outline locks after the streak', () {
+      final e = evaluator(guide: guide);
+      final verdict = run(e, detection: car(guide), frames: e.holdFrames);
+      expect(verdict.fill, closeTo(1, 0.02));
+      expect(verdict.drift, closeTo(0, 0.02));
+      expect(verdict.state, AimState.locked);
+    });
+
+    test('a bleeding guide does not report the car as cropped', () {
+      // 右前 and 左前 run the silhouette off one edge on purpose, so the car
+      // touching that edge is the instruction being followed, not a failure.
+      final e = evaluator(
+        guide: const Rect.fromLTRB(0.0, 0.34, 0.94, 0.80),
+        allowsEdge: true,
+      );
+      final verdict = run(
+        e,
+        detection: car(const Rect.fromLTRB(0.0, 0.34, 0.94, 0.80)),
+        frames: e.holdFrames,
+      );
+      expect(verdict.state, AimState.locked);
+    });
+
+    test('the same frame without the bleed is reported as cropped', () {
+      final e = evaluator(guide: const Rect.fromLTRB(0.0, 0.34, 0.94, 0.80));
+      final verdict = run(
+        e,
+        detection: car(const Rect.fromLTRB(0.0, 0.34, 0.94, 0.80)),
+      );
+      expect(verdict.hint, contains('切到'));
+    });
+
+    test('the reported box eases towards a new detection instead of snapping', () {
+      final e = evaluator(guide: guide);
+      run(e, detection: car(guide));
+      final moved = run(
+        e,
+        detection: car(const Rect.fromLTRB(0.26, 0.34, 0.94, 0.80)),
+        at: epoch.add(const Duration(milliseconds: 200)),
+      );
+
+      final box = moved.carBox!;
+      expect(box.left, greaterThan(guide.left));
+      expect(box.left, lessThan(0.26));
+    });
+
+    test('one jittery inference cannot knock a settled frame out of 已對準', () {
+      // A single-shot SSD moves its box by a few percent between frames even on
+      // a phone lying on a table, and at 5Hz that was landing either side of
+      // the threshold and strobing the badge. Smoothing plus the hysteresis on
+      // an already-locked frame is what stops it.
+      final e = evaluator(guide: guide);
+      run(e, detection: car(guide), frames: e.holdFrames);
+
+      final jitter = run(
+        e,
+        // Shifted a fifth of a frame down — far enough that this box on its
+        // own would score past even the relaxed drift limit.
+        detection: car(const Rect.fromLTRB(0.06, 0.53, 0.94, 0.99)),
+        at: epoch.add(const Duration(milliseconds: 200)),
+      );
+      expect(jitter.state, AimState.locked);
     });
 
     test('the cabin shot has no outline to miss', () {
@@ -310,12 +442,17 @@ void main() {
       expect(relaxed.maxCoverage, greaterThan(base.maxCoverage));
       expect(relaxed.blurFloor, lessThan(base.blurFloor));
       expect(relaxed.maxUnderExposed, greaterThan(base.maxUnderExposed));
+      // The alignment window widens from both ends too, or a driver who cannot
+      // get green would still be stuck after the timer relaxed everything else.
+      expect(relaxed.minFill, lessThan(base.minFill));
+      expect(relaxed.maxFill, greaterThan(base.maxFill));
+      expect(relaxed.maxDrift, greaterThan(base.maxDrift));
     });
 
     test('never relaxes past the point where anything at all would pass', () {
       const base = AimThresholds();
       final relaxed = base.relaxedBy(0.9);
-      expect(relaxed.maxCoverage, lessThanOrEqualTo(0.98));
+      expect(relaxed.maxCoverage, lessThanOrEqualTo(0.99));
       expect(relaxed.maxOverExposed, lessThanOrEqualTo(0.5));
       expect(relaxed.maxUnderExposed, lessThanOrEqualTo(0.5));
     });

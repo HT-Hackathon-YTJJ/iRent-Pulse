@@ -50,8 +50,10 @@ flutter run --dart-define=API_BASE_URL=http://192.168.x.x:8000
 | `POST` | `/v1/l1/screen` | 一張照片的阻塞快篩（multipart） |
 | `POST` | `/v1/returns/finalize` | 對升級的照片跑 L2，再跑 L3 |
 | `POST` | `/v1/l3/decide` | 純規則引擎，不呼叫模型，可離線重放 |
-| `GET` | `/v1/orders/{id}` | 客服複核要看的東西：兩側照片、判定、`reason` |
+| `GET` | `/v1/orders/{id}` | 客服複核要看的東西：兩側照片、判定、`reason`、當時的留言板 |
 | `GET` | `/v1/photos/{id}` | 取車／還車照片並排對照 |
+| `POST` | `/v1/cars/{car_no}/notes` | 寫一則車輛歷程留言 |
+| `GET` | `/v1/cars/{car_no}/notes` | 讀留言板；`?before=` 是 L2 套用的時間切點 |
 
 `/v1/l1/screen` 的 `slot` 是 `左前／右前／左後／右後／後座`。
 `後座`（以及 `車內`、`前座`…）會走車內整潔度的 prompt，其餘走車外車損的 prompt。
@@ -62,6 +64,15 @@ flutter run --dart-define=API_BASE_URL=http://192.168.x.x:8000
 api/.venv/bin/python api/scripts/smoke.py exterior 左前 assets/images/return/camera_scene.png
 api/.venv/bin/python api/scripts/smoke.py interior 後座 assets/images/return/shot_interior.jpg
 api/.venv/bin/python api/scripts/smoke.py pair 左前 還車.jpg 取車.jpg
+```
+
+留言板走完整條路，不需要任何取車照——同一張照片跑兩次，一次帶 `--note` 一次不帶，
+同一個凹洞會從「無法判定（停用・送客服）」變成「既有（放行）」：
+
+```bash
+api/.venv/bin/python api/scripts/demo_trip.py \
+  --note "上一位使用者：後保險桿右側有一個洞，還車時已回報" \
+  --return 右後=還車_右後.jpg
 ```
 
 ---
@@ -110,6 +121,22 @@ Stage B（程式） 集合差：damages(還) - damages(取)
 | `無法判定` | 該部位在取車照被遮擋／模糊／未入鏡 |
 
 沒有 `無法判定`，取車照沒拍好的案例會被誤報成新傷而誤扣押金。
+
+**第二個證據來源：車輛歷程留言板。** 上面那張表只有照片。真正花錢的情境是取車照
+根本不存在或沒拍到那個角度——而那個凹洞上一位使用者早就打進留言板了。那句話就是
+缺的證據。`app/board.py` 因此把留言當成**證詞**，判定順序固定為：
+
+1. 同角度的取車照（證據）
+2. **本趟開始前**寫的留言（證詞）
+3. `無法判定`（交給人看）
+
+**留言只能把判定往 `既有` 推**，永遠不能製造 `新增`——「有人這樣說」不是任何人
+該被求償的標準。取車照拍到該面板乾淨時照片贏；只有 `confirmed` 的留言能構成矛盾，
+而矛盾送人工，不上帳單。用到留言的 finding 會帶著 `note_id`，L3 再把留言原文
+一起寫進車況履歷，客服打開爭議時看到的是句子本身，不是一個外鍵。
+
+留言是自由文字，`board.parse` 用封閉字彙的字面比對加一小張同義詞表把它對回
+`(部位, 類型)`。刻意做得笨，而且笨在安全的方向：解析不出來的留言等於沒寫過。
 
 幻覺抑制：`temperature=0`、強制 JSON schema、中性問法、
 prompt 明確排除水漬／反光／陰影／地面倒影，

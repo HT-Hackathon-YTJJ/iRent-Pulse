@@ -11,6 +11,17 @@ Slots: 左前 右前 左後 右後（車外）、後座（車內）。
 Uploading the 取車 side matters more than it looks: without a baseline every
 finding L2 makes is 無法判定, because it cannot tell a new scratch from one the
 car already had.
+
+`--note` writes a 車輛歷程留言 to the board *before* the trip starts, which is
+the other way to give L2 a prior. It is the interesting demo precisely because
+it needs no pickup photo at all:
+
+    api/.venv/bin/python api/scripts/demo_trip.py \
+        --note "上一位使用者：後保險桿右側有一個洞，還車時已回報" \
+        --return 右後=return_rr.jpg
+
+Run it once with the note and once without, on the same photo, and watch the
+same dent move from 無法判定（車輛停用・送客服）to 既有（放行）.
 """
 
 import argparse
@@ -60,12 +71,47 @@ def main() -> int:
     ap.add_argument("--car-no", default="RDS-6583")
     ap.add_argument("--pickup", action="append", default=[], metavar="角度=路徑")
     ap.add_argument("--return", dest="ret", action="append", default=[], metavar="角度=路徑")
+    ap.add_argument(
+        "--note",
+        action="append",
+        default=[],
+        metavar="留言",
+        help="先寫進車輛歷程留言板，L2 會當成先前已知的車況",
+    )
+    ap.add_argument(
+        "--note-confirmed",
+        action="store_true",
+        help="把 --note 標成客服已複核；只有已複核的留言能對抗取車照",
+    )
     args = ap.parse_args()
 
     if not args.ret:
         ap.error("至少要有一張還車照片")
 
     with httpx.Client(timeout=180) as client:
+        # Written first, so it predates the order the photos create. L2 only
+        # reads notes older than the trip it is judging.
+        if args.note:
+            print("留言板（本趟開始前）")
+            for text in args.note:
+                response = client.post(
+                    f"{args.base}/v1/cars/{args.car_no}/notes",
+                    json={
+                        "text": text,
+                        "author": "user",
+                        "confirmed": args.note_confirmed,
+                    },
+                )
+                response.raise_for_status()
+                note = response.json()
+                parsed = (
+                    f"{note['part']}{note['type']}"
+                    if note.get("part") and note.get("type")
+                    else "未對應到部位（不影響判定）"
+                )
+                print(f"  · {text}  →  {parsed}")
+            print()
+
         print("L1（取車，建立比對基準）")
         for pair in args.pickup:
             slot, _, path = pair.partition("=")
@@ -87,6 +133,8 @@ def main() -> int:
         payload = response.json()
 
     for result in payload["l2"]:
+        if result.get("notes_considered"):
+            print(f"  （比對了 {result['notes_considered']} 則留言板紀錄）")
         for f in result["findings"]:
             print(f"  L2 {f['verdict']}：{f['part']}{f['type']}（severity {f['severity']}）— {f['reason']}")
     if not payload["l2"]:

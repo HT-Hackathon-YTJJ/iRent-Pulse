@@ -13,8 +13,11 @@ import '../data/return_inspection.dart';
 /// banner is dropped into the root overlay once the flow is back on the map,
 /// after the delay carried on the [ReturnNotice].
 ///
-/// A real build swaps this for a scheduled local notification; the copy and
-/// the timing model stay as they are.
+/// The real OS notification is sent alongside this by [ReturnNotifications];
+/// this banner is what the demo can rely on. A projector, a simulator with
+/// notifications muted, a web build, or a driver who declined the permission
+/// all still see the verdict arrive — and tapping either one opens the same
+/// 訂單明細 page.
 abstract final class ReturnNoticeBanner {
   /// Queues every notice of a scenario onto [overlay].
   ///
@@ -23,31 +26,46 @@ abstract final class ReturnNoticeBanner {
   /// due — and a Navigator's own context has no Overlay above it to find.
   static List<Timer> schedule(
     OverlayState overlay,
-    List<ReturnNotice> notices,
-  ) {
+    List<ReturnNotice> notices, {
+    VoidCallback? onTap,
+  }) {
     return [
       for (final notice in notices)
         Timer(notice.delay, () {
-          if (overlay.mounted) _present(overlay, notice);
+          if (overlay.mounted) _present(overlay, notice, onTap);
         }),
     ];
   }
 
-  static void _present(OverlayState overlay, ReturnNotice notice) {
+  static void _present(
+    OverlayState overlay,
+    ReturnNotice notice,
+    VoidCallback? onTap,
+  ) {
     late OverlayEntry entry;
     entry = OverlayEntry(
-      builder: (_) =>
-          _Banner(notice: notice, onDismissed: () => entry.remove()),
+      builder: (_) => _Banner(
+        notice: notice,
+        onDismissed: () => entry.remove(),
+        onTap: onTap,
+      ),
     );
     overlay.insert(entry);
   }
 }
 
 class _Banner extends StatefulWidget {
-  const _Banner({required this.notice, required this.onDismissed});
+  const _Banner({
+    required this.notice,
+    required this.onDismissed,
+    this.onTap,
+  });
 
   final ReturnNotice notice;
   final VoidCallback onDismissed;
+
+  /// Opens 訂單明細, the same as tapping the real notification.
+  final VoidCallback? onTap;
 
   @override
   State<_Banner> createState() => _BannerState();
@@ -100,7 +118,10 @@ class _BannerState extends State<_Banner> with SingleTickerProviderStateMixin {
           child: Material(
             color: Colors.transparent,
             child: GestureDetector(
-              onTap: _dismiss,
+              onTap: () {
+                widget.onTap?.call();
+                unawaited(_dismiss());
+              },
               onVerticalDragEnd: (d) {
                 if ((d.primaryVelocity ?? 0) < 0) _dismiss();
               },

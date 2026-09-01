@@ -4,9 +4,13 @@ import 'dart:io' show File;
 import 'package:flutter/material.dart';
 
 import '../data/return_inspection.dart';
+import '../data/vehicle.dart';
 import '../design/tokens.dart';
+import '../services/notifications.dart';
 import '../services/return_session.dart';
+import '../services/trip_state.dart';
 import '../widgets/return_notice_banner.dart';
+import 'order_detail_screen.dart';
 import 'return_analysis_screen.dart';
 import 'return_capture_screen.dart';
 import 'return_done_screen.dart';
@@ -30,9 +34,13 @@ class ReturnFlowScreen extends StatefulWidget {
     this.scenario = ReturnScenario.allClear,
     this.orderId = '47352776',
     this.carNo = 'RDS-6583',
+    this.vehicle = corollaCross,
   });
 
   final ReturnScenario scenario;
+
+  /// The car being handed back. Its 租用履歷 is the 留言板 L2 reads.
+  final VehicleProfile vehicle;
 
   /// Carried on every L1 call and used by L2 to find this trip's pickup photos.
   final String orderId;
@@ -86,7 +94,12 @@ class _ReturnFlowScreenState extends State<ReturnFlowScreen> {
   Future<void> _probe() async {
     final reachable = await _session.probe();
     if (!mounted || !reachable) return;
-    if (widget.scenario == ReturnScenario.allClear) _restart(ReturnScenario.live);
+    // Before any photo is taken, so every note predates the rental L2 is about
+    // to judge. `Order.started_at` is stamped by the first L1 upload.
+    unawaited(_session.publishBoard(widget.vehicle.reviews));
+    if (widget.scenario == ReturnScenario.allClear) {
+      _restart(ReturnScenario.live);
+    }
   }
 
   @override
@@ -101,6 +114,8 @@ class _ReturnFlowScreenState extends State<ReturnFlowScreen> {
   }
 
   void _restart(ReturnScenario scenario) => setState(() {
+    // A previous run's verdict must not land on top of the new one.
+    ReturnNotifications.instance.cancelPending();
     _scenario = scenario;
     _taken = {};
     _pending = _allSpots.toSet();
@@ -114,6 +129,10 @@ class _ReturnFlowScreenState extends State<ReturnFlowScreen> {
     final picked = await showModalBottomSheet<ReturnScenario>(
       context: context,
       backgroundColor: Colors.white,
+      // Seven scenarios with two lines of copy each do not fit above the fold
+      // on a 346dp display, and a modal sheet does not scroll unless it is told
+      // it may grow past half the screen.
+      isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(
           top: Radius.circular(AppRadius.sheet),
@@ -133,9 +152,16 @@ class _ReturnFlowScreenState extends State<ReturnFlowScreen> {
     setState(() => _scenario = ReturnScenario.allClear);
   }
 
-  void _afterAnalysis() => setState(() {
-    _step = _analysis.issue == null ? _Step.release : _Step.issue;
-  });
+  void _afterAnalysis() {
+    // Asked here, not at launch and not next to the camera prompt: the page the
+    // driver is about to see says 「結果將以通知告知，您可立即離開」, so the reason for
+    // the permission is on screen while the system dialog is up. A refusal is
+    // not a dead end — ReturnNoticeBanner shows the same copy in-app.
+    unawaited(ReturnNotifications.instance.requestPermission());
+    setState(() {
+      _step = _analysis.issue == null ? _Step.release : _Step.issue;
+    });
+  }
 
   void _retake(ReturnIssue issue) {
     // The flagged slot goes back to empty so the strip stops showing the
@@ -159,18 +185,22 @@ class _ReturnFlowScreenState extends State<ReturnFlowScreen> {
     // Resolved before the pop: this route is what is being torn down.
     final overlay = Overlay.of(context, rootOverlay: true);
 
+    // The car is back. Nothing about this rental should survive a restart —
+    // and popping to the map would otherwise leave 車輛資訊 restorable.
+    unawaited(TripStore.end());
+
     if (_live) {
       unawaited(
         _session.finalizeInBackground().then((_) {
           final message = _session.decision?.notifyUser;
           if (message == null) return;
-          ReturnNoticeBanner.schedule(overlay, [
+          _deliver([
             ReturnNotice(
               body: message,
               age: 'just now',
               delay: const Duration(seconds: 1),
             ),
-          ]);
+          ], overlay);
         }),
       );
       Navigator.of(context).popUntil((r) => r.isFirst);
@@ -179,9 +209,35 @@ class _ReturnFlowScreenState extends State<ReturnFlowScreen> {
 
     final notices = _scenario.notices;
     Navigator.of(context).popUntil((r) => r.isFirst);
-    if (notices.isNotEmpty) {
-      ReturnNoticeBanner.schedule(overlay, notices);
+    _deliver(notices, overlay);
+  }
+
+  /// Send each verdict twice over: once as a real OS notification, once as the
+  /// in-app banner the boards draw.
+  ///
+  /// Not a fallback chain — both, deliberately. The OS notification is the real
+  /// product behaviour and the one that still arrives when the app is closed;
+  /// the banner is what a projector, a muted simulator, the web build or a
+  /// declined permission can still show. Whichever the driver taps opens the
+  /// same 訂單明細 page.
+  void _deliver(List<ReturnNotice> notices, OverlayState overlay) {
+    if (notices.isEmpty) return;
+    for (final notice in notices) {
+      unawaited(
+        ReturnNotifications.instance.notify(
+          body: notice.body,
+          delay: notice.delay,
+          orderId: widget.orderId,
+        ),
+      );
     }
+    ReturnNoticeBanner.schedule(overlay, notices, onTap: _openOrder);
+  }
+
+  void _openOrder() {
+    ReturnNotifications.navigatorKey.currentState?.push(
+      OrderDetailScreen.route(),
+    );
   }
 
   @override
@@ -238,71 +294,79 @@ class _ScenarioPicker extends StatelessWidget {
   Widget build(BuildContext context) {
     return SafeArea(
       top: false,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('還車情境', style: AppText.titleS),
-            const SizedBox(height: 2),
-            const Text(
-              '選一個情境重新開始拍照流程',
-              style: TextStyle(fontSize: 13, color: AppColor.textMuted),
-            ),
-            const SizedBox(height: 14),
-            for (final s in ReturnScenario.values)
-              InkWell(
-                onTap: () => Navigator.of(context).pop(s),
-                borderRadius: BorderRadius.circular(AppRadius.chip),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 9),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      SizedBox(
-                        width: 26,
-                        child: Text(
-                          s.number,
-                          style: TextStyle(
-                            fontSize: 16,
-                            color: s == current
-                                ? AppColor.brand
-                                : AppColor.textSecondary,
-                          ),
-                        ),
-                      ),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              s.title,
+      child: ConstrainedBox(
+        // Never taller than most of the screen, and scrollable inside that.
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(context).height * 0.8,
+        ),
+        child: SingleChildScrollView(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('還車情境', style: AppText.titleS),
+                const SizedBox(height: 2),
+                const Text(
+                  '選一個情境重新開始拍照流程',
+                  style: TextStyle(fontSize: 13, color: AppColor.textMuted),
+                ),
+                const SizedBox(height: 14),
+                for (final s in ReturnScenario.values)
+                  InkWell(
+                    onTap: () => Navigator.of(context).pop(s),
+                    borderRadius: BorderRadius.circular(AppRadius.chip),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 9),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          SizedBox(
+                            width: 26,
+                            child: Text(
+                              s.number,
                               style: TextStyle(
-                                fontSize: 15,
-                                fontWeight: FontWeight.w700,
+                                fontSize: 16,
                                 color: s == current
                                     ? AppColor.brand
-                                    : AppColor.textPrimary,
+                                    : AppColor.textSecondary,
                               ),
                             ),
-                            const SizedBox(height: 2),
-                            Text(
-                              s.caption,
-                              style: const TextStyle(
-                                fontSize: 12.5,
-                                height: 1.4,
-                                color: AppColor.textMuted,
-                              ),
+                          ),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  s.title,
+                                  style: TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w700,
+                                    color: s == current
+                                        ? AppColor.brand
+                                        : AppColor.textPrimary,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  s.caption,
+                                  style: const TextStyle(
+                                    fontSize: 12.5,
+                                    height: 1.4,
+                                    color: AppColor.textMuted,
+                                  ),
+                                ),
+                              ],
                             ),
-                          ],
-                        ),
+                          ),
+                        ],
                       ),
-                    ],
+                    ),
                   ),
-                ),
-              ),
-          ],
+              ],
+            ),
+          ),
         ),
       ),
     );

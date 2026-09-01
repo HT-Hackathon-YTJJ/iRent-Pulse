@@ -4,6 +4,9 @@ import 'package:flutter/services.dart';
 import 'config/map_config.dart';
 import 'design/tokens.dart';
 import 'screens/home_map_screen.dart';
+import 'screens/order_detail_screen.dart';
+import 'services/notifications.dart';
+import 'services/trip_state.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -11,11 +14,19 @@ Future<void> main() async {
   // 地圖要在第一張地圖建立前初始化：Web 載 JS SDK、iOS 把金鑰交給 GMSServices。
   // 沒有金鑰（或初始化失敗）時會自動退回 OpenStreetMap 底圖。
   await initGoogleMaps();
-  runApp(const IRentPulseApp());
+  // 通知通道要在任何人排程通知之前備好；權限留到真的要發時才要。
+  await ReturnNotifications.instance.init();
+  // 讀在 runApp 之前：租用中的話第一幀就要是「行駛中」，不能先閃一下地圖首頁
+  // 再把 Sheet 疊上去。
+  final resumed = await TripStore.load();
+  runApp(IRentPulseApp(resumedTrip: resumed));
 }
 
 class IRentPulseApp extends StatelessWidget {
-  const IRentPulseApp({super.key});
+  const IRentPulseApp({super.key, this.resumedTrip});
+
+  /// A rental that was still running when the app was last killed.
+  final ActiveTrip? resumedTrip;
 
   @override
   Widget build(BuildContext context) {
@@ -42,8 +53,16 @@ class IRentPulseApp extends StatelessWidget {
       ),
     );
 
+    // Tapping the 分支A 通知 opens 訂單明細, from anywhere — including a cold
+    // start, where there is no widget tree yet to route from.
+    ReturnNotifications.instance.onOpenOrder = (_) {
+      final navigator = ReturnNotifications.navigatorKey.currentState;
+      navigator?.push(OrderDetailScreen.route());
+    };
+
     return MaterialApp(
       title: 'iRent Pulse',
+      navigatorKey: ReturnNotifications.navigatorKey,
       debugShowCheckedModeBanner: false,
       theme: base.copyWith(
         textTheme: base.textTheme.apply(
@@ -65,7 +84,7 @@ class IRentPulseApp extends StatelessWidget {
         maxScaleFactor: 1.0,
         child: child!,
       ),
-      home: const HomeMapScreen(),
+      home: HomeMapScreen(resumedTrip: resumedTrip),
     );
   }
 }

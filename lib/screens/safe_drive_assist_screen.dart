@@ -71,6 +71,8 @@ class _SafeDriveAssistScreenState extends State<SafeDriveAssistScreen> {
     }
   }
 
+  final Map<String, GlobalKey> _rowKeys = {};
+
   void _selectSection(String id) {
     if (id == _sectionId) return;
     setState(() {
@@ -86,18 +88,30 @@ class _SafeDriveAssistScreenState extends State<SafeDriveAssistScreen> {
     if (_selected == null) return;
     _expandAtLeast(_midSheet);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final ctx = _rowKey(number).currentContext;
-      if (ctx == null) return;
-      Scrollable.ensureVisible(
-        ctx,
-        duration: const Duration(milliseconds: 320),
-        curve: Curves.easeOutCubic,
-        alignment: 0.15,
-      );
+      _scrollToItem(number);
     });
+    if (_sheet.isAttached && _sheet.size < _midSheet - 0.01) {
+      Future.delayed(const Duration(milliseconds: 270), () {
+        if (mounted && _selected == number) {
+          _scrollToItem(number);
+        }
+      });
+    }
   }
 
-  GlobalObjectKey _rowKey(int number) => GlobalObjectKey('$_sectionId-$number');
+  void _scrollToItem(int number) {
+    final ctx = _rowKey(number).currentContext;
+    if (ctx == null) return;
+    Scrollable.ensureVisible(
+      ctx,
+      duration: const Duration(milliseconds: 320),
+      curve: Curves.easeOutCubic,
+      alignment: 0.1,
+    );
+  }
+
+  GlobalKey _rowKey(int number) =>
+      _rowKeys.putIfAbsent('$_sectionId-$number', () => GlobalKey());
 
   // --- sheet dragging -------------------------------------------------------
 
@@ -198,16 +212,23 @@ class _SafeDriveAssistScreenState extends State<SafeDriveAssistScreen> {
         ),
         child: LayoutBuilder(
           builder: (context, c) {
-            // The diagram absorbs whatever height is left once the header, the
-            // chips and one list row are accounted for. Collapsed all the way
-            // down there is no room for it, so it steps aside and the sheet
-            // reads as title + tabs + text.
+            // The diagram adapts to each section's image aspect ratio rather than
+            // locking into a single fixed height, preserving vertical space for the
+            // item list below.
+            // When collapsed low, the diagram steps aside so the sheet reads as
+            // title + tabs + text.
             final free = c.maxHeight - _headerHeight - _chipsHeight;
-            final diagramHeight = (free - _minListHeight).clamp(
+            final maxDiagramHeight = (free - _minListHeight - 14).clamp(
               0.0,
               math.min(c.maxHeight * 0.44, 268.0),
             );
-            final showDiagram = diagramHeight >= _minDiagramHeight;
+            final availableWidth = math.max(0.0, c.maxWidth - 30);
+            final aspect = _DiagramCard.aspectFor(section);
+            final naturalCardHeight =
+                aspect > 0 ? availableWidth / aspect : maxDiagramHeight;
+            final diagramCardHeight =
+                math.min(naturalCardHeight, maxDiagramHeight);
+            final showDiagram = diagramCardHeight >= _minDiagramHeight;
 
             return Column(
               children: [
@@ -227,8 +248,10 @@ class _SafeDriveAssistScreenState extends State<SafeDriveAssistScreen> {
                           children: [
                             _chipRow(),
                             if (showDiagram)
-                              SizedBox(
-                                height: diagramHeight + 14,
+                              AnimatedContainer(
+                                duration: const Duration(milliseconds: 200),
+                                curve: Curves.easeOutCubic,
+                                height: diagramCardHeight + 14,
                                 child: Padding(
                                   padding: const EdgeInsets.fromLTRB(
                                     15,
@@ -254,7 +277,7 @@ class _SafeDriveAssistScreenState extends State<SafeDriveAssistScreen> {
                   child: ColoredBox(
                     color: Colors.white,
                     child: section.isOverview
-                        ? ListView(
+                        ? SingleChildScrollView(
                             controller: scrollController,
                             padding: EdgeInsets.fromLTRB(
                               15,
@@ -262,9 +285,9 @@ class _SafeDriveAssistScreenState extends State<SafeDriveAssistScreen> {
                               15,
                               20 + bottomInset,
                             ),
-                            children: [_overviewHint()],
+                            child: _overviewHint(),
                           )
-                        : ListView.separated(
+                        : SingleChildScrollView(
                             controller: scrollController,
                             padding: EdgeInsets.fromLTRB(
                               15,
@@ -272,18 +295,21 @@ class _SafeDriveAssistScreenState extends State<SafeDriveAssistScreen> {
                               15,
                               20 + bottomInset,
                             ),
-                            itemCount: section.items.length,
-                            separatorBuilder: (_, _) =>
-                                const SizedBox(height: 8),
-                            itemBuilder: (context, i) {
-                              final item = section.items[i];
-                              return _ItemRow(
-                                key: _rowKey(item.number),
-                                item: item,
-                                selected: _selected == item.number,
-                                onTap: () => _selectItem(item.number),
-                              );
-                            },
+                            child: Column(
+                              children: [
+                                for (var i = 0; i < section.items.length; i++) ...[
+                                  if (i > 0) const SizedBox(height: 8),
+                                  _ItemRow(
+                                    key: _rowKey(section.items[i].number),
+                                    item: section.items[i],
+                                    selected:
+                                        _selected == section.items[i].number,
+                                    onTap: () =>
+                                        _selectItem(section.items[i].number),
+                                  ),
+                                ],
+                              ],
+                            ),
                           ),
                   ),
                 ),
@@ -454,59 +480,67 @@ class _DiagramCard extends StatelessWidget {
   final ValueChanged<String> onSelectSection;
 
   /// The card the marker positions were authored against in Figma.
-  static const _authoredCard = Size(372, 243);
+  static const authoredCard = Size(372, 243);
 
-  /// Where the artwork actually lands inside [_authoredCard].
-  Rect get _drawnRect {
+  static Rect drawnRectFor(AssistSection section) {
     final rect = section.layout.imageRect;
     if (rect != null || section.layout.boxWidthFactor != 1) {
-      final w = _authoredCard.width * section.layout.boxWidthFactor;
+      final w = authoredCard.width * section.layout.boxWidthFactor;
       return Rect.fromLTWH(
-        (_authoredCard.width - w) / 2,
+        (authoredCard.width - w) / 2,
         0,
         w,
-        _authoredCard.height,
+        authoredCard.height,
       );
     }
     final aspect = section.contentAspect;
-    if (aspect == null) return Offset.zero & _authoredCard;
+    if (aspect == null) return Offset.zero & authoredCard;
 
-    final cardAspect = _authoredCard.width / _authoredCard.height;
+    final cardAspect = authoredCard.width / authoredCard.height;
     if (aspect >= cardAspect) {
-      final h = _authoredCard.width / aspect;
+      final h = authoredCard.width / aspect;
       return Rect.fromLTWH(
         0,
-        (_authoredCard.height - h) / 2,
-        _authoredCard.width,
+        (authoredCard.height - h) / 2,
+        authoredCard.width,
         h,
       );
     }
-    final w = _authoredCard.height * aspect;
+    final w = authoredCard.height * aspect;
     return Rect.fromLTWH(
-      (_authoredCard.width - w) / 2,
+      (authoredCard.width - w) / 2,
       0,
       w,
-      _authoredCard.height,
+      authoredCard.height,
     );
   }
+
+  static double aspectFor(AssistSection section) {
+    if (section.isOverview) {
+      return authoredCard.width / authoredCard.height;
+    }
+    final drawn = drawnRectFor(section);
+    return drawn.width / drawn.height;
+  }
+
+  /// Where the artwork actually lands inside [authoredCard].
+  Rect get _drawnRect => drawnRectFor(section);
 
   /// Card-space fraction → artwork-space fraction.
   Offset _remap(Offset p) {
     final r = _drawnRect;
     return Offset(
-      (p.dx * _authoredCard.width - r.left) / r.width,
-      (p.dy * _authoredCard.height - r.top) / r.height,
+      (p.dx * authoredCard.width - r.left) / r.width,
+      (p.dy * authoredCard.height - r.top) / r.height,
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final drawn = _drawnRect;
-    final aspect = section.isOverview
-        ? _authoredCard.width / _authoredCard.height
-        : drawn.width / drawn.height;
+    final aspect = aspectFor(section);
 
-    return Center(
+    return Align(
+      alignment: Alignment.topCenter,
       child: Container(
         decoration: BoxDecoration(
           color: Colors.white,

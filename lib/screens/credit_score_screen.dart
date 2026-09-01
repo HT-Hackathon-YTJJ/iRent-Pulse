@@ -217,8 +217,8 @@ class _ScenarioMenu extends StatelessWidget {
 /// Figma drew the axis with the ticks 0·50·60·100·200·300 spread at even
 /// pixel steps, which makes the first 60 points occupy a third of the bar and
 /// the fill land somewhere the number can't explain. Here the axis is linear
-/// 0–300: the fill, the knob and the two threshold notches all sit at their
-/// true position, so 235 reads where you'd expect it.
+/// 0–300: the fill and the two threshold notches sit at their true position,
+/// so 235 reads where you'd expect it.
 class _ScoreCard extends StatelessWidget {
   const _ScoreCard({required this.data});
 
@@ -254,6 +254,15 @@ class _ScoreCard extends StatelessWidget {
               const SizedBox(height: 2),
               Text(
                 '${data.score}',
+                // Latin digits leave a third of their line box empty below the
+                // baseline where a CJK face would put descenders, so a 42pt
+                // numeral sitting in its own box reads as pushed upwards away
+                // from the label above it. Trimming the box to the glyphs puts
+                // the gap back where the layout says it is.
+                textHeightBehavior: const TextHeightBehavior(
+                  applyHeightToFirstAscent: false,
+                  applyHeightToLastDescent: false,
+                ),
                 style: TextStyle(
                   fontSize: 42,
                   height: 1.05,
@@ -339,8 +348,7 @@ class _ScoreAxis extends StatelessWidget {
     required this.notches,
   });
 
-  static const _trackHeight = 7.0;
-  static const _knob = 14.0;
+  static const _trackHeight = 8.0;
 
   final double score;
   final double max;
@@ -356,60 +364,39 @@ class _ScoreAxis extends StatelessWidget {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            SizedBox(
-              height: _knob,
-              child: Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  Align(
-                    alignment: Alignment.center,
-                    child: Container(
-                      height: _trackHeight,
-                      decoration: BoxDecoration(
-                        color: AppColor.sheetDark,
-                        borderRadius: BorderRadius.circular(AppRadius.pill),
-                      ),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(AppRadius.pill),
+              child: SizedBox(
+                height: _trackHeight,
+                child: Stack(
+                  children: [
+                    Container(
+                      color: AppColor.sheetDark,
                     ),
-                  ),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: Container(
-                      height: _trackHeight,
-                      width: xOf(score),
-                      decoration: BoxDecoration(
-                        color: AppColor.brand,
-                        borderRadius: BorderRadius.circular(AppRadius.pill),
-                      ),
-                    ),
-                  ),
-                  // Threshold notches sit on the track itself, so the label
-                  // below never has to be read as a scale of its own.
-                  for (final notch in notches)
-                    Positioned(
-                      left: xOf(notch) - 1,
-                      top: (_knob - _trackHeight) / 2,
+                    Align(
+                      alignment: Alignment.centerLeft,
                       child: Container(
-                        width: 2,
-                        height: _trackHeight,
-                        color: Colors.white.withValues(alpha: 0.75),
+                        width: xOf(score),
+                        color: AppColor.brand,
                       ),
                     ),
-                  Positioned(
-                    left: (xOf(score) - _knob / 2).clamp(0.0, width - _knob),
-                    child: Container(
-                      width: _knob,
-                      height: _knob,
-                      decoration: const BoxDecoration(
-                        color: Colors.white,
-                        shape: BoxShape.circle,
-                        boxShadow: AppShadow.floating,
+                    // Threshold notches sit on the track itself, so the label
+                    // below never has to be read as a scale of its own.
+                    for (final notch in notches)
+                      Positioned(
+                        left: xOf(notch) - 1,
+                        top: 0,
+                        bottom: 0,
+                        child: Container(
+                          width: 2,
+                          color: Colors.white.withValues(alpha: 0.75),
+                        ),
                       ),
-                    ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: 6),
             SizedBox(
               height: 14,
               child: Stack(
@@ -525,48 +512,39 @@ class _OrderQuota extends StatelessWidget {
         // Half a card is not enough for this line at its designed sizes once
         // the display width drops, and none of the three parts can be
         // shortened, so the line scales as a whole.
+        // Same fix as _ValueLine: 本期訂單 **6**/10 筆 is one phrase, so it is one
+        // paragraph and the count shares a baseline with the words around it.
         FittedBox(
           fit: BoxFit.scaleDown,
           alignment: Alignment.centerLeft,
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              const Text(
-                '本期訂單',
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
-                  color: AppColor.textPrimary,
-                ),
-              ),
-              const SizedBox(width: 6),
-              Text.rich(
+          child: Text.rich(
+            TextSpan(
+              children: [
+                const TextSpan(text: '本期訂單 '),
                 TextSpan(
-                  children: [
-                    TextSpan(
-                      text: '${quota.done}',
-                      style: const TextStyle(color: AppColor.brand),
-                    ),
-                    TextSpan(text: '/${quota.total}'),
-                  ],
+                  text: '${quota.done}',
                   style: const TextStyle(
                     fontSize: 19,
-                    height: 1,
                     fontWeight: FontWeight.w700,
-                    color: AppColor.textPrimary,
+                    color: AppColor.brand,
                   ),
                 ),
-              ),
-              const SizedBox(width: 3),
-              const Text(
-                '筆',
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
-                  color: AppColor.textPrimary,
+                TextSpan(
+                  text: '/${quota.total}',
+                  style: const TextStyle(
+                    fontSize: 19,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
+                const TextSpan(text: ' 筆'),
+              ],
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+                color: AppColor.textPrimary,
               ),
-            ],
+            ),
+            maxLines: 1,
           ),
         ),
         const SizedBox(height: 7),
@@ -884,6 +862,20 @@ class _ValuePart {
 }
 
 /// A "剩餘 42 天" style line: mixed sizes on one baseline.
+///
+/// One [Text.rich], not a row of [Text]s.
+///
+/// The row version bottom-aligned its children, because baseline alignment
+/// cannot be resolved inside an `IntrinsicHeight` and 獎勵金 sits inside one.
+/// Bottom alignment lines up the *line boxes*, and a line box is as tall as its
+/// font size — so a 26pt numeral and a 17pt 天 ended up on two different
+/// baselines, with the digits riding visibly high above the characters either
+/// side of them. That is the "數字比中文字高出很多" report.
+///
+/// Inline spans have no such problem: text layout puts every run of a
+/// paragraph on the same baseline whatever its size, which is what the eye
+/// expects from a phrase like 剩餘 **42** 天. `height` is left unset for the
+/// same reason — an explicit line height re-introduces per-span leading.
 class _ValueLine extends StatelessWidget {
   const _ValueLine({required this.parts});
 
@@ -891,32 +883,28 @@ class _ValueLine extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Bottom-aligned rather than baseline-aligned: baseline alignment cannot
-    // be resolved inside IntrinsicHeight, and with these sizes the two read
-    // the same. Scaled as a whole for the same reason 本期訂單 is: a value line
-    // is one phrase at two sizes, and no part of it can be dropped.
+    // Scaled as a whole: a value line is one phrase at two sizes, and no part
+    // of it can be dropped when the display is narrow.
     return FittedBox(
       fit: BoxFit.scaleDown,
       alignment: Alignment.centerLeft,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          for (final part in parts)
-            Padding(
-              padding: const EdgeInsets.only(right: 5),
-              child: Text(
-                part.text,
-                maxLines: 1,
+      child: Text.rich(
+        TextSpan(
+          children: [
+            for (final (i, part) in parts.indexed) ...[
+              if (i > 0) const TextSpan(text: ' '),
+              TextSpan(
+                text: part.text,
                 style: TextStyle(
                   fontSize: part.size,
-                  height: 1.1,
                   fontWeight: part.weight,
                   color: part.color,
                 ),
               ),
-            ),
-        ],
+            ],
+          ],
+        ),
+        maxLines: 1,
       ),
     );
   }

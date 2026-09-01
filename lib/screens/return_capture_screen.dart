@@ -98,27 +98,32 @@ const double _stripGap = 8;
 const double _tileRadius = 10.48;
 const double _shutterSize = 77.255;
 
-/// Clear space either side of the alignment silhouette.
-///
-/// Figma lets the silhouette run off the edge of the frame, which reads as
-/// "put the car half out of shot". The guide is what the driver is being asked
-/// to fill, so it has to be a shape they can actually fill — entirely on
-/// screen, with room to spare.
-const double _guideMargin = 24;
+/// Clear space either side of the alignment silhouette, measured against the
+/// visible camera frame rather than the screen.
+const double _guideMargin = 14;
 
-/// How far the silhouette's tint carries. Enough to read over a bright white
-/// car in daylight, light enough to leave the frame underneath judgeable.
-const double _guideOpacity = 0.3;
+/// How far the ghosted 示意圖 carries.
+///
+/// This is the layer the driver actually aims with: at 0.42 the drawn bumper,
+/// A-pillar and wheel arch are legible against a real car without hiding the
+/// real one underneath. A flat silhouette can only say "car goes here"; the
+/// render says "stand where this was drawn from".
+const double _guideArtOpacity = 0.42;
+
+/// The state colour is carried mostly by the outline. The fill is a whisper
+/// under the render — enough to make 灰／黃／綠 readable at arm's length,
+/// light enough to leave the frame underneath judgeable.
+const double _guideFillOpacity = 0.14;
 
 /// The outline is the part that has to survive a busy frame, so it is close to
 /// solid where the fill is a wash.
-const double _guideEdgeOpacity = 0.8;
+const double _guideEdgeOpacity = 0.85;
 
 /// Top and bottom of the band the silhouette is centred in, measured from the
 /// safe-area top and the bottom edge. Keeps it clear of the 未對準 badge above
-/// and the hint pill below at any screen height.
-const double _guideBandTop = 145;
-const double _guideBandBottom = _stripBottom + _stripSize + 60;
+/// and the strip below at any screen height.
+const double _guideBandTop = 76;
+const double _guideBandBottom = _stripBottom + _stripSize + 28;
 
 class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
     with SingleTickerProviderStateMixin {
@@ -188,17 +193,27 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
       _reportedNoCamera = true;
       widget.onNoCamera?.call();
     }
-    // 連續確認 has been met — this is the automatic shutter the spec asks for.
-    // 情境⑥ deliberately never reaches it, because its frame never settles.
-    if (_liveCamera && !_reviewing && !_capturing && _camera.verdict.isAcceptable) {
-      unawaited(_capture(manual: false));
-    }
   }
 
+  /// The shutter is the driver's. L0 decides *whether it may fire*, never
+  /// *when*.
+  ///
+  /// It used to fire itself the moment 連續確認 was met, and that is a worse
+  /// deal than it looks: the frame the automation likes is rarely the frame
+  /// the person was about to take, it goes off while they are still moving,
+  /// and it takes away the one moment in the flow where they get to decide the
+  /// photo is right. So the button is the only way a photo is taken.
+  ///
+  /// **It only fires on green.** An amber or grey frame raises 判定未達標
+  /// instead, which still offers 仍要送出 — the shutter is gated, never locked.
+  /// A driver who cannot get to green in a dark car park has to be able to
+  /// finish the return; that costs one mediocre photo, and refusing costs the
+  /// whole return. If that escape hatch is ever removed, it is this comment
+  /// that has to change with it.
   void _onShutter() {
     if (_reviewing || _capturing) return;
     if (_verdict.isAcceptable) {
-      unawaited(_capture(manual: false));
+      unawaited(_capture(manual: true));
     } else {
       setState(() => _reviewing = true);
     }
@@ -255,40 +270,91 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
     _simulator.restart();
   }
 
+  /// Where the live frame is drawn, in logical pixels.
+  ///
+  /// The preview used to be `BoxFit.cover`-ed across the whole screen, the way
+  /// the Figma still is. On a 20:9 phone that throws away a third of a 4:3
+  /// stream, and it throws it away *sideways* — which is the real reason the
+  /// driver had to stand so far back, and the reason the alignment readout
+  /// could not be trusted. L0 scores the car against the guide in **frame**
+  /// coordinates; the driver aims against the guide in **screen** coordinates;
+  /// and with a crop in between those two rectangles are not the same shape. A
+  /// car sitting comfortably inside the outline on screen could be up against
+  /// the edge of the frame the model saw.
+  ///
+  /// Drawing the frame whole removes the discrepancy instead of correcting for
+  /// it: one rectangle, one coordinate space, and the driver sees exactly what
+  /// the sensor — and therefore the detector — sees. The letterbox above and
+  /// below is where the chrome already lived.
+  Rect _previewRect(Size screen, double safeTop) {
+    final aspect = _camera.previewAspect;
+    if (!_liveCamera || aspect == null) return Offset.zero & screen;
+
+    final width = screen.width;
+    final height = width / aspect;
+    if (height >= screen.height) {
+      return Rect.fromLTWH(0, (screen.height - height) / 2, width, height);
+    }
+    // Centred on the band the driver is actually looking at rather than on the
+    // screen, so the top bar and the strip sit in the letterbox.
+    final bandTop = safeTop + _guideBandTop;
+    final bandBottom = math.max(bandTop + 120, screen.height - _guideBandBottom);
+    final top = ((bandTop + bandBottom) / 2 - height / 2).clamp(
+      0.0,
+      screen.height - height,
+    );
+    return Rect.fromLTWH(0, top, width, height);
+  }
+
   /// Where the alignment silhouette is painted, in logical pixels.
   ///
-  /// The shape keeps its own aspect, is inset by [_guideMargin] on both sides,
-  /// and is centred in the band between the badge and the hint pill. On a short
-  /// screen the height runs out first and the width follows it down, so the
-  /// guide never grows into the chrome at either end.
-  Rect _guideRect(Size screen, double safeTop, CaptureSpot spot) {
-    final top = safeTop + _guideBandTop;
-    final bottom = math.max(top + 80, screen.height - _guideBandBottom);
+  /// The shape keeps its own aspect and is centred in the visible frame. Slots
+  /// that declare a [CaptureSpot.guideBleed] are laid out so the *visible* part
+  /// still spans the frame's width and the remainder runs off the named edge —
+  /// which is what makes the near corner of the car big enough to document.
+  Rect _guideRect(Rect preview, CaptureSpot spot) {
+    final bleed = spot.guideBleed.abs().clamp(0.0, 0.6);
+    final span = math.max(40.0, preview.width - _guideMargin * 2);
 
-    var width = screen.width - _guideMargin * 2;
+    var width = span / (1 - bleed);
     var height = width / spot.guideAspect;
-    if (height > bottom - top) {
-      height = bottom - top;
+
+    final maxHeight = preview.height - 16;
+    if (height > maxHeight) {
+      height = maxHeight;
       width = height * spot.guideAspect;
     }
+
+    final visible = width * (1 - bleed);
+    final left = spot.guideBleed < 0
+        // Bleeding left: the right edge of the shape is the one that stays put.
+        ? preview.right - _guideMargin - width
+        : preview.left + _guideMargin + (span - visible) / 2;
+
     return Rect.fromLTWH(
-      (screen.width - width) / 2,
-      top + (bottom - top - height) / 2,
+      left,
+      preview.top + (preview.height - height) / 2,
       width,
       height,
     );
   }
 
-  /// The same rect in screen-normalised coordinates, which is what the IoU
-  /// check needs. One source of truth: the overlap L0 scores is measured
-  /// against exactly the shape the driver is looking at.
-  Rect _guideOnScreen(Size screen, double safeTop, CaptureSpot spot) {
-    final rect = _guideRect(screen, safeTop, spot);
+  /// The part of the guide the driver can see, in preview-normalised
+  /// coordinates — the space [CaptureSession] scores boxes in.
+  ///
+  /// Clipping matters: a bleeding guide asks for a shape that is partly off
+  /// screen, and the detector can only ever report the part that is on it. If
+  /// the fill ratio were measured against the whole silhouette every bleeding
+  /// slot would sit permanently on 再靠近一點.
+  Rect? _guideInFrame(Rect preview, CaptureSpot spot) {
+    if (preview.isEmpty) return null;
+    final visible = _guideRect(preview, spot).intersect(preview);
+    if (visible.width <= 0 || visible.height <= 0) return null;
     return Rect.fromLTRB(
-      rect.left / screen.width,
-      rect.top / screen.height,
-      rect.right / screen.width,
-      rect.bottom / screen.height,
+      (visible.left - preview.left) / preview.width,
+      (visible.top - preview.top) / preview.height,
+      (visible.right - preview.left) / preview.width,
+      (visible.bottom - preview.top) / preview.height,
     );
   }
 
@@ -299,13 +365,13 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
     final verdict = _verdict;
     final spot = _current;
 
+    final preview = _previewRect(media.size, safeTop);
+
     if (_liveCamera) {
       _camera.configure(
-        guideRect: _camera.frameRectFor(
-          _guideOnScreen(media.size, safeTop, spot),
-          media.size,
-        ),
+        guideRect: _guideInFrame(preview, spot),
         requireGuide: spot.isCorner,
+        guideAllowsEdge: spot.guideBleed != 0,
       );
     }
 
@@ -314,17 +380,19 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
       body: Stack(
         fit: StackFit.expand,
         children: [
-          if (_liveCamera)
-            _Preview(controller: _camera.controller!)
-          else
-            Image.asset(spot.viewfinderAsset, fit: BoxFit.cover),
-
-          // The alignment silhouette. It stays up in every state and changes
-          // colour instead of disappearing — 灰 → 黃 → 綠 is the readout the
-          // driver is steering by, and taking it away the moment it starts
-          // working leaves them nothing to hold the frame against.
           Positioned.fromRect(
-            rect: _guideRect(media.size, safeTop, spot),
+            rect: preview,
+            child: _liveCamera
+                ? _Preview(controller: _camera.controller!)
+                : Image.asset(spot.viewfinderAsset, fit: BoxFit.cover),
+          ),
+
+          // The alignment guide. It stays up in every state and changes colour
+          // instead of disappearing — 灰 → 黃 → 綠 is the readout the driver is
+          // steering by, and taking it away the moment it starts working leaves
+          // them nothing to hold the frame against.
+          Positioned.fromRect(
+            rect: _guideRect(preview, spot),
             child: _AimGuide(spot: spot, state: verdict.state),
           ),
 
@@ -357,7 +425,20 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
               child: Center(child: _HintPill(text: verdict.hint!)),
             ),
 
-          const Positioned(right: 16, bottom: 290, child: _ZoomCluster()),
+          // In the bottom chrome, mirroring the flash button. The Figma board
+          // floats it over the frame, which worked when the frame was
+          // full-bleed; with the preview drawn whole it landed on top of the
+          // guide and shoulder-to-shoulder with the hint pill.
+          Positioned(
+            right: 24,
+            bottom: 90,
+            child: _ZoomCluster(
+              zoom: _liveCamera ? _camera.zoom : 1,
+              minZoom: _liveCamera ? _camera.minZoom : 1,
+              maxZoom: _liveCamera ? _camera.maxZoom : 1,
+              onChanged: (z) => unawaited(_camera.setZoom(z)),
+            ),
+          ),
 
           if (_camera.failure != CaptureFailure.none)
             Positioned(
@@ -415,14 +496,9 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
             right: 0,
             bottom: 71.5,
             child: Center(
-              child: GestureDetector(
+              child: _ShutterButton(
+                armed: verdict.isAcceptable,
                 onTap: _onShutter,
-                behavior: HitTestBehavior.opaque,
-                child: SvgPicture.asset(
-                  '${_assetRoot}icon_shutter.svg',
-                  width: _shutterSize,
-                  height: _shutterSize,
-                ),
               ),
             ),
           ),
@@ -450,7 +526,12 @@ const String _assetRoot = 'assets/images/return/';
 
 // ---------------------------------------------------------------------------
 
-/// The live feed, cropped to fill the way the Figma still does.
+/// The live feed, drawn whole.
+///
+/// The caller has already sized the box to the stream's own aspect ratio (see
+/// `_previewRect`), so filling it is a straight scale with no crop and no
+/// distortion — every pixel the detector is looking at is a pixel the driver
+/// can see, which is what makes the alignment readout mean anything.
 class _Preview extends StatelessWidget {
   const _Preview({required this.controller});
 
@@ -461,7 +542,7 @@ class _Preview extends StatelessWidget {
     final preview = controller.value.previewSize;
     if (preview == null) return const ColoredBox(color: Colors.black);
     return FittedBox(
-      fit: BoxFit.cover,
+      fit: BoxFit.fill,
       child: SizedBox(
         // previewSize is reported in the sensor's own orientation, so the two
         // are swapped for the portrait viewfinder.
@@ -602,8 +683,12 @@ class _TopBar extends StatelessWidget {
 /// one pair of assets covers all three states and the change between them can
 /// be tweened.
 ///
-/// The outline is not decoration. A flat wash at [_guideOpacity] vanishes
-/// against a bright wall, which is the background 未對準 has to survive.
+/// The alignment guide: the 示意圖 ghosted over the live frame, a whisper of the
+/// state colour behind it, and a solid outline on top.
+///
+/// The outline is not decoration. A flat wash vanishes against a bright wall,
+/// which is the background 未對準 has to survive — and the render underneath,
+/// being a grey car, needs something that is unambiguously *ours* around it.
 class _AimGuide extends StatelessWidget {
   const _AimGuide({required this.spot, required this.state});
 
@@ -616,7 +701,13 @@ class _AimGuide extends StatelessWidget {
       child: Stack(
         fit: StackFit.expand,
         children: [
-          _tinted(spot.guideAsset, state.guideColor, _guideOpacity),
+          _tinted(spot.guideAsset, state.guideColor, _guideFillOpacity),
+          // Untinted: the whole point of the render is that its own shading is
+          // what the driver matches the real car against.
+          Opacity(
+            opacity: _guideArtOpacity,
+            child: Image.asset(spot.guideArtAsset, fit: BoxFit.fill),
+          ),
           _tinted(spot.guideEdgeAsset, state.guideEdgeColor, _guideEdgeOpacity),
         ],
       ),
@@ -632,6 +723,51 @@ class _AimGuide extends StatelessWidget {
         fit: BoxFit.fill,
         color: (color ?? target).withValues(alpha: opacity),
         colorBlendMode: BlendMode.srcIn,
+      ),
+    );
+  }
+}
+
+/// The shutter.
+///
+/// Dimmed until the frame is green, so the state of the check is legible from
+/// the control the driver's thumb is already on rather than only from a badge
+/// in the opposite corner. It is still tappable when dim — that raises
+/// 判定未達標, which is the escape hatch. See `_onShutter`.
+class _ShutterButton extends StatelessWidget {
+  const _ShutterButton({required this.armed, required this.onTap});
+
+  final bool armed;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: AnimatedOpacity(
+        duration: const Duration(milliseconds: 200),
+        opacity: armed ? 1 : 0.45,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            boxShadow: armed
+                ? [
+                    BoxShadow(
+                      color: AppColor.aimLocked.withValues(alpha: 0.55),
+                      blurRadius: 18,
+                      spreadRadius: 2,
+                    ),
+                  ]
+                : const [],
+          ),
+          child: SvgPicture.asset(
+            '${_assetRoot}icon_shutter.svg',
+            width: _shutterSize,
+            height: _shutterSize,
+          ),
+        ),
       ),
     );
   }
@@ -676,55 +812,75 @@ class _HintPill extends StatelessWidget {
   }
 }
 
-/// The 0.5× / 1× cluster on the right of the viewfinder.
+/// The lens cluster on the right of the viewfinder.
+///
+/// Live, not decoration. It starts on 1×, which on a multi-lens Android phone
+/// means the main camera at its own field of view — the fix for a viewfinder
+/// that opened around 2× and sent the driver walking backwards across the car
+/// park. Chips the device cannot reach are not drawn.
 class _ZoomCluster extends StatelessWidget {
-  const _ZoomCluster();
+  const _ZoomCluster({
+    required this.zoom,
+    required this.minZoom,
+    required this.maxZoom,
+    required this.onChanged,
+  });
+
+  final double zoom;
+  final double minZoom;
+  final double maxZoom;
+  final ValueChanged<double> onChanged;
+
+  static const _steps = [0.5, 1.0, 2.0];
 
   @override
   Widget build(BuildContext context) {
+    final available = _steps
+        .where((z) => z >= minZoom - 0.01 && z <= maxZoom + 0.01)
+        .toList();
+    if (available.length < 2) return const SizedBox.shrink();
+
     return Row(
       crossAxisAlignment: CrossAxisAlignment.center,
+      mainAxisSize: MainAxisSize.min,
       children: [
-        _chip(
-          size: 23.8,
-          label: '0.5',
-          style: const TextStyle(
-            fontSize: 10,
-            height: 1.4,
-            letterSpacing: 0.5,
-            color: Colors.white,
-          ),
-        ),
-        const SizedBox(width: 4),
-        _chip(
-          size: 38.2,
-          label: '1',
-          style: const TextStyle(
-            fontSize: 16,
-            height: 1.4,
-            letterSpacing: 0.8,
-            fontWeight: FontWeight.w600,
-            color: AppColor.zoomActive,
-          ),
-        ),
+        for (final step in available) ...[
+          if (step != available.first) const SizedBox(width: 4),
+          _chip(step, active: (zoom - step).abs() < 0.05),
+        ],
       ],
     );
   }
 
-  Widget _chip({
-    required double size,
-    required String label,
-    required TextStyle style,
-  }) {
-    return Container(
-      width: size,
-      height: size,
-      alignment: Alignment.center,
-      decoration: const BoxDecoration(
-        color: Color(0x59000000),
-        shape: BoxShape.circle,
+  Widget _chip(double step, {required bool active}) {
+    final label = step == step.roundToDouble()
+        ? '${step.round()}'
+        : '$step';
+    return GestureDetector(
+      onTap: () => onChanged(step),
+      behavior: HitTestBehavior.opaque,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        width: active ? 38.2 : 27,
+        height: active ? 38.2 : 27,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          // Translucent *white*, not black: these now sit in the letterbox
+          // below the frame, where a 35%-black chip is invisible.
+          color: Colors.white.withValues(alpha: active ? 0.22 : 0.14),
+          shape: BoxShape.circle,
+        ),
+        child: Text(
+          active ? '$label×' : label,
+          style: TextStyle(
+            fontSize: active ? 13 : 11,
+            height: 1.4,
+            letterSpacing: 0.5,
+            fontWeight: active ? FontWeight.w600 : FontWeight.w400,
+            color: active ? AppColor.zoomActive : Colors.white,
+          ),
+        ),
       ),
-      child: Text(label, style: style),
     );
   }
 }

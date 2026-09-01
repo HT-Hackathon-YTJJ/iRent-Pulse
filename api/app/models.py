@@ -70,6 +70,37 @@ class ObservedDamage(BaseModel):
     severity: Severity
 
 
+class BoardNote(BaseModel):
+    """One entry on a car's 車輛歷程留言板.
+
+    Written by whoever had the car last (`author='user'`), by 門市 during a
+    check, or by the system when a decision is recorded. L2 reads the ones that
+    predate the rental it is judging — see `board.py` for what a note is and is
+    not allowed to decide.
+
+    `part` and `type` are optional because the board is free text. A UI that
+    tags them fills them in; anything else is parsed, best effort, by
+    `board.parse`, and a note that parses to nothing is simply inert.
+    """
+
+    note_id: str = ""
+    car_no: str
+    #: The rental the note was written at the end of, when there was one.
+    order_id: Optional[str] = None
+    author: str = "user"  # user / staff / system
+    #: ISO-8601. L2 only reads notes strictly older than the trip it is judging;
+    #: a note written after the return cannot exonerate the return.
+    created_at: str = ""
+    text: str = ""
+    part: Optional[str] = None
+    type: Optional[str] = None
+    severity: int = 0
+    photo_ids: List[str] = []
+    #: True once a human has looked. An unconfirmed note is enough to withhold a
+    #: claim, never enough to contradict a pickup photograph.
+    confirmed: bool = False
+
+
 class L1Result(BaseModel):
     photo_id: str
     order_id: str
@@ -117,6 +148,10 @@ class L2Finding(BaseModel):
     severity: int = Field(ge=1, le=4)
     confidence: float = 0.0
     reason: str = ""
+    #: The board note this verdict leaned on, if any. Carried so 客服 can open
+    #: the sentence that stopped a claim, and so the decision stays auditable
+    #: without re-running anything.
+    note_id: Optional[str] = None
 
 
 class L2Result(BaseModel):
@@ -127,6 +162,10 @@ class L2Result(BaseModel):
     findings: List[L2Finding] = []
     max_new_severity: int = 0
     unclear_parts: List[str] = []
+    #: How many board notes were in scope for this photo. Zero is the pre-board
+    #: behaviour, and worth being able to tell apart from "notes existed and
+    #: none of them matched".
+    notes_considered: int = 0
     model: str = ""
     latency_ms: int = 0
     cost_usd: float = 0.0

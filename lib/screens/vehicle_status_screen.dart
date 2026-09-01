@@ -2,8 +2,9 @@ import 'package:flutter/material.dart';
 
 import '../data/vehicle.dart';
 import '../design/tokens.dart';
-import '../widgets/back_button.dart';
+import '../services/trip_state.dart';
 import '../widgets/bottom_action_bar.dart';
+import '../widgets/map_backdrop.dart';
 import '../widgets/pill_button.dart';
 import '../widgets/vehicle_header.dart';
 import 'return_checklist_dialog.dart';
@@ -65,24 +66,144 @@ const _stages = <TripStage, _StageData>{
   ),
 };
 
+/// 車輛資訊 — what the driver is looking at while the car is out.
+///
+/// This is a **sheet over the live map**, not a page.
+///
+/// It used to be a full-screen route with a back chevron, and that was wrong in
+/// two ways at once. The chevron pointed at a screen the driver could not
+/// usefully be on — the car is unlocked and running, so "back" is not a state
+/// that exists — and the page hid the one thing someone driving actually needs
+/// on screen: where they are, and where the nearest petrol station is. Putting
+/// the panel on a sheet keeps the map underneath it and lets the driver push it
+/// out of the way with a thumb, which is the whole point.
+///
+/// The sheet snaps to three heights and cannot be dismissed: the shallowest
+/// stop still shows the plate, the fuel and 還車. There is no gesture that
+/// makes a running rental disappear — the only way out of this screen is
+/// through the return.
 class VehicleStatusScreen extends StatefulWidget {
   const VehicleStatusScreen({
     super.key,
     required this.vehicle,
     this.stage = TripStage.departure,
+    this.initialSheetSize,
   });
 
   final VehicleProfile vehicle;
   final TripStage stage;
 
+  /// Where the sheet was left last time, restored by [TripStore]. Null opens at
+  /// the middle stop.
+  final double? initialSheetSize;
+
   @override
   State<VehicleStatusScreen> createState() => _VehicleStatusScreenState();
 }
 
-class _VehicleStatusScreenState extends State<VehicleStatusScreen> {
+class _VehicleStatusScreenState extends State<VehicleStatusScreen>
+    with WidgetsBindingObserver {
+  /// Three stops. The shallowest is deliberately past half: the fuel card and
+  /// 還車 have to stay on screen at every stop, or collapsing the sheet would
+  /// mean losing the controls rather than seeing more map.
+  static const _minSheet = 0.45;
+  static const _midSheet = 0.74;
+  static const _maxSheet = 0.96;
+  static const _snapSizes = <double>[_minSheet, _midSheet, _maxSheet];
+
+  final _sheet = DraggableScrollableController();
+
   late TripStage _stage = widget.stage;
+  late final double _initialSize =
+      (widget.initialSheetSize ?? _midSheet).clamp(_minSheet, _maxSheet);
 
   _StageData get _data => _stages[_stage]!;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    // Idempotent, and it covers both ways onto this screen: a fresh unlock and
+    // a cold start that restored one. Whichever it was, the store now agrees
+    // with what is on screen.
+    TripStore.start(
+      plate: widget.vehicle.plate,
+      stage: _stage.name,
+      sheetSize: _initialSize,
+    );
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _sheet.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // The last chance to record where the sheet is before the process may be
+    // killed. Drag-end already writes; this covers a swipe-away mid-drag.
+    if (state == AppLifecycleState.paused && _sheet.isAttached) {
+      TripStore.saveSheet(_sheet.size);
+    }
+  }
+
+  void _setStage(TripStage stage) {
+    setState(() => _stage = stage);
+    TripStore.saveStage(stage.name);
+  }
+
+  // --- sheet dragging -------------------------------------------------------
+
+  /// Lets the whole dark header act as a drag handle, not just the grabber.
+  void _dragSheet(double deltaY) {
+    if (!_sheet.isAttached) return;
+    final height = MediaQuery.sizeOf(context).height;
+    if (height == 0) return;
+    _sheet.jumpTo((_sheet.size - deltaY / height).clamp(_minSheet, _maxSheet));
+  }
+
+  void _settleSheet(double velocityY) {
+    if (!_sheet.isAttached) return;
+    final current = _sheet.size;
+    final double target;
+    if (velocityY < -320) {
+      target = _snapSizes.firstWhere(
+        (s) => s > current + 0.01,
+        orElse: () => _maxSheet,
+      );
+    } else if (velocityY > 320) {
+      target = _snapSizes.lastWhere(
+        (s) => s < current - 0.01,
+        orElse: () => _minSheet,
+      );
+    } else {
+      target = _snapSizes.reduce(
+        (a, b) => (a - current).abs() <= (b - current).abs() ? a : b,
+      );
+    }
+    _sheet
+        .animateTo(
+          target,
+          duration: const Duration(milliseconds: 240),
+          curve: Curves.easeOutCubic,
+        )
+        .whenComplete(() => TripStore.saveSheet(target));
+  }
+
+  /// The system back gesture. There is nothing behind this screen to go back
+  /// to, so it does the next most useful thing and gets out of the map's way.
+  void _handleBack() {
+    if (!_sheet.isAttached) return;
+    _sheet
+        .animateTo(
+          _minSheet,
+          duration: const Duration(milliseconds: 240),
+          curve: Curves.easeOutCubic,
+        )
+        .whenComplete(() => TripStore.saveSheet(_minSheet));
+  }
 
   Future<void> _return() async {
     final ok = await showReturnChecklistDialog(
@@ -92,102 +213,148 @@ class _VehicleStatusScreenState extends State<VehicleStatusScreen> {
     if (!mounted || ok != true) return;
     // The checklist is the last thing asked indoors; everything after it is
     // the camera flow.
-    await Navigator.of(
-      context,
-    ).push(MaterialPageRoute<void>(builder: (_) => const ReturnFlowScreen()));
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ReturnFlowScreen(vehicle: widget.vehicle),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _handleBack();
+      },
+      child: Scaffold(
+        backgroundColor: AppColor.page,
+        body: SizedBox.expand(
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: MapBackdrop(
+                  center: DemoPlace.chengKung,
+                  zoom: 15.4,
+                  // Keep the basemap attribution clear of the collapsed sheet.
+                  bottomPadding: MediaQuery.sizeOf(context).height * _minSheet,
+                ),
+              ),
+              DraggableScrollableSheet(
+                controller: _sheet,
+                initialChildSize: _initialSize,
+                minChildSize: _minSheet,
+                maxChildSize: _maxSheet,
+                snap: true,
+                snapSizes: _snapSizes,
+                builder: (context, scrollController) =>
+                    _sheetBody(scrollController),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _sheetBody(ScrollController scrollController) {
     final data = _data;
     final low = !data.canReturn;
     final accent = low ? AppColor.brand : AppColor.success;
 
-    return Scaffold(
-      backgroundColor: AppColor.page,
-      body: Column(
-        children: [
-          Container(
-            color: AppColor.sheetDark,
-            padding: EdgeInsets.only(top: MediaQuery.paddingOf(context).top),
-            child: VehicleHeaderPanel(
-              vehicle: widget.vehicle,
-              showGrabber: false,
-              leading: AppBackButton(
-                onTap: () => Navigator.of(context).popUntil((r) => r.isFirst),
-                filled: false,
-                color: Colors.white,
-                tooltip: '返回地圖',
-              ),
-              trailing: _StageMenu(
-                stage: _stage,
-                onChanged: (s) => setState(() => _stage = s),
+    return DecoratedBox(
+      decoration: const BoxDecoration(
+        color: AppColor.page,
+        borderRadius: BorderRadius.vertical(
+          top: Radius.circular(AppRadius.sheet),
+        ),
+        boxShadow: AppShadow.bottomBar,
+      ),
+      child: ClipRRect(
+        borderRadius: const BorderRadius.vertical(
+          top: Radius.circular(AppRadius.sheet),
+        ),
+        child: Column(
+          children: [
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onVerticalDragUpdate: (d) => _dragSheet(d.primaryDelta ?? 0),
+              onVerticalDragEnd: (d) =>
+                  _settleSheet(d.velocity.pixelsPerSecond.dy),
+              child: VehicleHeaderPanel(
+                vehicle: widget.vehicle,
+                badgesTrailing: true,
+                trailing: _StageMenu(stage: _stage, onChanged: _setStage),
               ),
             ),
-          ),
-          Expanded(
-            child: ListView(
-              padding: const EdgeInsets.fromLTRB(15, 16, 15, 20),
-              children: [
-                _FuelCard(
-                  percent: data.fuelPercent,
-                  rangeKm: data.rangeKm,
-                  accent: accent,
-                ),
-                const SizedBox(height: 12),
-                _MetricCard(
-                  icon: Icons.directions_car_filled_outlined,
-                  label: '已行駛里程數',
-                  values: [('${data.drivenKm}', 'km')],
-                ),
-                const SizedBox(height: 12),
-                _MetricCard(
-                  icon: Icons.schedule,
-                  label: data.timeLabel,
-                  values: [('${data.hours}', '小時'), ('${data.minutes}', '分鐘')],
-                ),
-                const SizedBox(height: 16),
-                const _Banner(
-                  color: AppColor.successText,
-                  background: AppColor.successSoft,
-                  title: '背景服務運作中',
-                  subtitle: '即時計算里程、油量與使用時間',
-                ),
-                if (low) ...[
-                  const SizedBox(height: 12),
-                  _Banner(
-                    color: AppColor.warning,
-                    background: AppColor.warningSoft,
-                    title: '目前油量過低，無法還車',
-                    subtitle: '請先加油後再回到還車流程',
-                    onTap: () {},
+            Expanded(
+              child: ListView(
+                controller: scrollController,
+                padding: const EdgeInsets.fromLTRB(15, 16, 15, 20),
+                children: [
+                  _FuelCard(
+                    percent: data.fuelPercent,
+                    rangeKm: data.rangeKm,
+                    accent: accent,
                   ),
-                ],
-                const SizedBox(height: 12),
-                _AssistShortcut(
-                  onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) =>
-                          SafeDriveAssistScreen(vehicle: widget.vehicle),
+                  const SizedBox(height: 12),
+                  _MetricCard(
+                    icon: Icons.directions_car_filled_outlined,
+                    label: '已行駛里程數',
+                    values: [('${data.drivenKm}', 'km')],
+                  ),
+                  const SizedBox(height: 12),
+                  _MetricCard(
+                    icon: Icons.schedule,
+                    label: data.timeLabel,
+                    values: [
+                      ('${data.hours}', '小時'),
+                      ('${data.minutes}', '分鐘'),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  const _Banner(
+                    color: AppColor.successText,
+                    background: AppColor.successSoft,
+                    title: '背景服務運作中',
+                    subtitle: '即時計算里程、油量與使用時間',
+                  ),
+                  if (low) ...[
+                    const SizedBox(height: 12),
+                    _Banner(
+                      color: AppColor.warning,
+                      background: AppColor.warningSoft,
+                      title: '目前油量過低，無法還車',
+                      subtitle: '請先加油後再回到還車流程',
+                      onTap: () {},
+                    ),
+                  ],
+                  const SizedBox(height: 12),
+                  _AssistShortcut(
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) =>
+                            SafeDriveAssistScreen(vehicle: widget.vehicle),
+                      ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-          // Page-coloured rather than white: over the grey list a white slab
-          // read as a separate panel instead of a footer.
-          BottomActionBar(
-            background: AppColor.page,
-            padding: const EdgeInsets.fromLTRB(
-              16,
-              16,
-              16,
-              BottomActionBar.minBottomGap,
+            // Page-coloured rather than white: over the grey list a white slab
+            // read as a separate panel instead of a footer.
+            BottomActionBar(
+              background: AppColor.page,
+              padding: const EdgeInsets.fromLTRB(
+                16,
+                12,
+                16,
+                BottomActionBar.minBottomGap,
+              ),
+              child: PillButton(label: '還車', onPressed: _return),
             ),
-            child: PillButton(label: '還車', onPressed: _return),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -263,15 +430,12 @@ class _FuelCard extends StatelessWidget {
                 color: AppColor.textPrimary,
               ),
               const SizedBox(width: 9),
-              const Padding(
-                padding: EdgeInsets.only(bottom: 2),
-                child: Text(
-                  '當前油量',
-                  style: TextStyle(
-                    fontSize: 16.5,
-                    fontWeight: FontWeight.w700,
-                    color: AppColor.textPrimary,
-                  ),
+              const Text(
+                '當前油量',
+                style: TextStyle(
+                  fontSize: 16.5,
+                  fontWeight: FontWeight.w700,
+                  color: AppColor.textPrimary,
                 ),
               ),
               const Spacer(),
@@ -281,6 +445,14 @@ class _FuelCard extends StatelessWidget {
                 curve: Curves.easeOutCubic,
                 builder: (context, v, _) => Text(
                   '${v.round()}%',
+                  // Trimmed to the glyphs, so the 40pt numeral's baseline is
+                  // the row's baseline rather than the bottom of a line box a
+                  // third of which is empty. That empty third is what the
+                  // label beside it used to be nudged 2pt up to compensate for.
+                  textHeightBehavior: const TextHeightBehavior(
+                    applyHeightToFirstAscent: false,
+                    applyHeightToLastDescent: false,
+                  ),
                   style: TextStyle(
                     fontSize: 40,
                     height: 1,
@@ -432,30 +604,35 @@ class _MetricCard extends StatelessWidget {
             ),
           ),
           const Spacer(),
-          for (final (value, unit) in values) ...[
-            Text(
-              value,
+          // "190 km" and "1 小時 30 分鐘" are each one phrase at two sizes, so
+          // each is one paragraph: inline spans share a baseline, where a row
+          // of Texts only ever shares the bottom of its line boxes — which is
+          // what left the numerals riding high and needed a hand-tuned 3pt
+          // nudge under every unit to look almost right.
+          Text.rich(
+            TextSpan(
+              children: [
+                for (final (i, (value, unit)) in values.indexed) ...[
+                  if (i > 0) const TextSpan(text: ' '),
+                  TextSpan(
+                    text: value,
+                    style: const TextStyle(
+                      fontSize: 26,
+                      fontWeight: FontWeight.w700,
+                      color: AppColor.warning,
+                    ),
+                  ),
+                  TextSpan(text: ' $unit'),
+                ],
+              ],
               style: const TextStyle(
-                fontSize: 26,
-                height: 1.1,
+                fontSize: 14.5,
                 fontWeight: FontWeight.w700,
-                color: AppColor.warning,
+                color: AppColor.textPrimary,
               ),
             ),
-            const SizedBox(width: 4),
-            Padding(
-              padding: const EdgeInsets.only(bottom: 3),
-              child: Text(
-                unit,
-                style: const TextStyle(
-                  fontSize: 14.5,
-                  fontWeight: FontWeight.w700,
-                  color: AppColor.textPrimary,
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
-          ],
+            maxLines: 1,
+          ),
         ],
       ),
     );

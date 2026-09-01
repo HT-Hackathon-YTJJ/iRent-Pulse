@@ -1,6 +1,7 @@
 import Flutter
 import GoogleMaps
 import UIKit
+import UserNotifications
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
@@ -10,6 +11,18 @@ import UIKit
 
   /// GMSServices 只吃第一次的金鑰；hot restart 會重跑 main()，所以要記住。
   private var mapsKeyProvided = false
+
+  /// 還車後的通知有可能在 App 還開著的時候就送達（分析只花幾秒）。iOS 預設會把前景
+  /// 通知直接吞掉，除非有人當 UNUserNotificationCenter 的 delegate——
+  /// FlutterAppDelegate 本身就實作了這個協定，所以只要把自己掛上去，
+  /// flutter_local_notifications 的 defaultPresentAlert 才會真的有作用。
+  override func application(
+    _ application: UIApplication,
+    didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+  ) -> Bool {
+    UNUserNotificationCenter.current().delegate = self
+    return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+  }
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)

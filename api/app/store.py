@@ -9,10 +9,15 @@ the shape the queries need, not a demo shortcut that would have to be redesigned
 import threading
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from . import config
-from .models import L1Result, L2Result, L3Decision
+from .models import BoardNote, L1Result, L2Result, L3Decision
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 @dataclass
@@ -30,6 +35,10 @@ class Photo:
 class Order:
     order_id: str
     car_no: str
+    #: When this rental's first photo arrived. L2 uses it as the cut-off for
+    #: which board notes count as prior: a note written after the driver
+    #: started shooting cannot be evidence about what they found.
+    started_at: str = field(default_factory=now_iso)
     photos: Dict[str, Photo] = field(default_factory=dict)
     l1: Dict[str, L1Result] = field(default_factory=dict)
     l2: Dict[str, L2Result] = field(default_factory=dict)
@@ -46,6 +55,9 @@ class Store:
         #: compares against. Keyed by car rather than order because the pickup
         #: and the return are the same trip but arrive as separate requests.
         self._baseline: Dict[str, Dict[str, str]] = {}
+        #: car_no -> 車輛歷程留言板, oldest first. Keyed by car for the same
+        #: reason the baseline is: the board outlives every rental on it.
+        self._notes: Dict[str, List[BoardNote]] = {}
 
     def order(self, order_id: str, car_no: str) -> Order:
         with self._lock:
@@ -92,6 +104,32 @@ class Store:
     def baseline_photo(self, car_no: str, slot: str) -> Optional[Photo]:
         photo_id = self._baseline.get(car_no, {}).get(slot)
         return self.photo(photo_id) if photo_id else None
+
+    # -- 留言板 ---------------------------------------------------------------
+
+    def add_note(self, note: BoardNote) -> BoardNote:
+        stored = note.model_copy(
+            update={
+                "note_id": note.note_id or ("n_" + uuid.uuid4().hex[:12]),
+                "created_at": note.created_at or now_iso(),
+            }
+        )
+        with self._lock:
+            self._notes.setdefault(stored.car_no, []).append(stored)
+        return stored
+
+    def notes(self, car_no: str, *, before: Optional[str] = None) -> List[BoardNote]:
+        """The board for one car, oldest first.
+
+        [before] filters to notes strictly older than an ISO timestamp, which is
+        how L2 gets "what was already known when this rental started" rather
+        than "everything ever written about this car" — including the note the
+        current driver is about to add.
+        """
+        found = list(self._notes.get(car_no, []))
+        if before is not None:
+            found = [n for n in found if n.created_at and n.created_at < before]
+        return found
 
     def record_l1(self, result: L1Result) -> None:
         order = self.order(result.order_id, result.car_no)

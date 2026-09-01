@@ -12,11 +12,18 @@ Two invariants from the spec:
   charge a customer. Those are queue entries for a human.
 * **AI 只能把車移出「可租用」.** The one automatic path back is rule 8, a return
   where every check passed.
+
+The 留言板 does **not** appear as a rule here, deliberately. L2 already resolved
+每一筆 finding against it and wrote the note into `reason`; adding a rule that
+reads notes again would mean two layers deciding the same thing, and the rule
+table would stop being the whole story. What L3 does with the board is carry it:
+the note id travels into 車況履歷 so 客服 can open the sentence that stopped a
+claim, and rule 5's explanation says when one is attached.
 """
 
 from typing import Dict, List, Optional
 
-from .models import L1Result, L2Result, L3Decision, Stage, VehicleStatus
+from .models import BoardNote, L1Result, L2Result, L3Decision, Stage, VehicleStatus
 
 Q_CLEAN = "清潔確認"
 Q_CS = "客服複核"
@@ -29,8 +36,10 @@ def decide(
     car_no: str,
     l1: List[L1Result],
     l2: Optional[List[L2Result]] = None,
+    notes: Optional[List[BoardNote]] = None,
 ) -> L3Decision:
     l2 = l2 or []
+    notes_by_id = {n.note_id: n for n in (notes or []) if n.note_id}
     ret = [r for r in l1 if r.stage is Stage.ret]
     pickup = [r for r in l1 if r.stage is Stage.pickup]
 
@@ -50,7 +59,7 @@ def decide(
             rule=rule,
             queues=queues,
             explain=explain,
-            history_entries=_history(l2),
+            history_entries=_history(l2, notes_by_id),
             notify_user=notify,
         )
 
@@ -117,12 +126,17 @@ def decide(
     unclear = [f for r in l2 for f in r.findings if f.verdict == "無法判定"]
     if unclear:
         parts = "、".join(sorted({f.part for f in unclear}))
+        # A note attached to one of these is the difference between 客服 opening
+        # a blank case and 客服 opening a case with the previous driver's own
+        # words in it. Say so, or nobody will look.
+        cited = [f.note_id for f in unclear if f.note_id]
+        board = f"（其中 {len(cited)} 項有留言板紀錄可對照）" if cited else ""
         return out(
             5,
             VehicleStatus.out_of_service,
             "undetermined",
             [Q_CS],
-            f"{parts} 在取車照中未清晰入鏡，無法判定是否為本趟新增。",
+            f"{parts} 在取車照中未清晰入鏡，無法判定是否為本趟新增{board}。",
             "本次還車檢查已完成，如有異常我們會主動與您聯繫。",
         )
 
@@ -159,21 +173,35 @@ def decide(
     return out(8, VehicleStatus.rentable, None, [], "所有檢查通過，車輛自動回到可租用。")
 
 
-def _history(l2: List[L2Result]) -> List[Dict[str, str]]:
+def _history(
+    l2: List[L2Result], notes: Optional[Dict[str, BoardNote]] = None
+) -> List[Dict[str, str]]:
     """Everything a human confirmed or has to confirm goes on the car's record.
 
     「確認求償」與「記入車況履歷」必須在同一個 transaction 內完成，否則同一道傷
     會重複向不同用戶求償 — so the entries travel with the decision, not after it.
+
+    An entry that leaned on a board note carries the note's id and its text.
+    The id alone would be enough to join on, but this record is what 客服 reads
+    during a dispute, and a claim withheld on somebody's testimony should show
+    the testimony next to it rather than a foreign key.
     """
-    return [
-        {
-            "part": f.part,
-            "type": f.type,
-            "verdict": f.verdict,
-            "severity": str(f.severity),
-            "photo_id": r.photo_id,
-            "reason": f.reason,
-        }
-        for r in l2
-        for f in r.findings
-    ]
+    notes = notes or {}
+    entries: List[Dict[str, str]] = []
+    for r in l2:
+        for f in r.findings:
+            entry = {
+                "part": f.part,
+                "type": f.type,
+                "verdict": f.verdict,
+                "severity": str(f.severity),
+                "photo_id": r.photo_id,
+                "reason": f.reason,
+            }
+            if f.note_id:
+                entry["note_id"] = f.note_id
+                note = notes.get(f.note_id)
+                if note is not None:
+                    entry["note_text"] = note.text
+            entries.append(entry)
+    return entries

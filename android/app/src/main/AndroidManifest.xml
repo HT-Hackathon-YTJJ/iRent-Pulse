@@ -6,6 +6,9 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Android 13+ 的執行期通知權限。還車後的「已確認車內整潔」是唯一一則通知，
+         由 lib/services/notifications.dart 在分析頁之後才要，被拒絕不會擋住還車。 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 
     <!-- required="false"：沒有相機或沒有閃光燈的裝置仍可安裝，
          畫面會退回無相機的流程。 -->

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' show lerpDouble;
 
@@ -78,6 +79,20 @@ class PinVehiclesSheetState extends State<PinVehiclesSheet> {
   static const _badgeRow = 24.0; // iRent logo / region row
   static const _badgeGap = 6.0;
   static const _carAspect = 299 / 533; // car render's intrinsic ratio
+
+  /// 查看更多 — the button that says out loud what the card only implied.
+  ///
+  /// The collapsed card *is* a sheet handle: it swipes sideways between cars
+  /// and pulls up into the booking page. Testers did neither. A grabber and a
+  /// card that happens to move are an affordance only to someone who already
+  /// knows the gesture, and the cost of missing it is the whole booking flow —
+  /// people tapped the card, watched it not open, and went back to the map.
+  ///
+  /// So the gesture keeps working and gets a button next to it. It does exactly
+  /// what the swipe-up does, which is why it fades out as the sheet opens
+  /// rather than staying on as a second control for a thing already done.
+  static const _moreButton = 34.0;
+  static const _moreGap = 10.0;
 
   /// Where the sheet rests when opened, and how far it may be pushed while
   /// the content underneath scrolls.
@@ -196,11 +211,18 @@ class PinVehiclesSheetState extends State<PinVehiclesSheet> {
   static double _cardPadBottom(double t, double inset) =>
       lerpDouble(math.max(14, inset), 16, t)!;
 
+  /// The button is gone by the time the sheet is a third of the way up, so it
+  /// never overlaps the booking content growing out from under the card.
+  static double _moreFade(double t) => (1 - t * 3).clamp(0.0, 1.0);
+
+  static double _moreBlock(double t) => (_moreButton + _moreGap) * _moreFade(t);
+
   static double _cardHeight(double t, double inset) =>
       _grabberBlock +
       _badgeRow +
       _badgeGap +
       _carWidth(t) * _carAspect +
+      _moreBlock(t) +
       _cardPadBottom(t, inset);
 
   // ---------------------------------------------------------------------------
@@ -239,6 +261,17 @@ class PinVehiclesSheetState extends State<PinVehiclesSheet> {
     } else if (_reveal < 0.5) {
       _open();
     }
+  }
+
+  /// 查看更多. Same destination as pulling the sheet up, from whichever card it
+  /// was pressed on — a card behind the front one comes forward first, so the
+  /// booking page that opens is never a different car from the one tapped.
+  Future<void> _showMore(int i) async {
+    if (i != _index) {
+      await _pages.animateToPage(i, duration: _slide, curve: Curves.easeOut);
+      if (!mounted) return;
+    }
+    _open();
   }
 
   /// Runs the deck across to [pin]'s first card.
@@ -380,7 +413,10 @@ class PinVehiclesSheetState extends State<PinVehiclesSheet> {
                   listing: _deck.cards[i],
                   carWidth: _carWidth(t),
                   padBottom: _cardPadBottom(t, bottomInset),
+                  moreHeight: _moreBlock(t),
+                  moreOpacity: _moreFade(t),
                   onTap: () => _onCardTap(i),
+                  onMore: () => unawaited(_showMore(i)),
                 ),
               ),
             ),
@@ -400,13 +436,21 @@ class _VehicleCard extends StatelessWidget {
     required this.listing,
     required this.carWidth,
     required this.padBottom,
+    required this.moreHeight,
+    required this.moreOpacity,
     required this.onTap,
+    required this.onMore,
   });
 
   final VehicleListing listing;
   final double carWidth;
   final double padBottom;
+
+  /// Height reserved for 查看更多, already interpolated to 0 as the sheet opens.
+  final double moreHeight;
+  final double moreOpacity;
   final VoidCallback onTap;
+  final VoidCallback onMore;
 
   @override
   Widget build(BuildContext context) {
@@ -528,10 +572,74 @@ class _VehicleCard extends StatelessWidget {
                       ],
                     ),
                   ),
+                  if (moreHeight > 0.5)
+                    ClipRect(
+                      child: SizedBox(
+                        height: moreHeight,
+                        child: OverflowBox(
+                          minHeight: 0,
+                          maxHeight:
+                              PinVehiclesSheetState._moreButton +
+                              PinVehiclesSheetState._moreGap,
+                          alignment: Alignment.topCenter,
+                          child: Padding(
+                            padding: const EdgeInsets.only(
+                              top: PinVehiclesSheetState._moreGap,
+                            ),
+                            child: Opacity(
+                              opacity: moreOpacity,
+                              child: _MoreButton(onTap: onMore),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The brand-red call to action inside the collapsed card.
+class _MoreButton extends StatelessWidget {
+  const _MoreButton({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: AppColor.brand,
+      borderRadius: BorderRadius.circular(AppRadius.pill),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(AppRadius.pill),
+        child: const SizedBox(
+          height: PinVehiclesSheetState._moreButton,
+          width: double.infinity,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                '查看更多',
+                style: TextStyle(
+                  fontSize: 14.5,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.white,
+                ),
+              ),
+              SizedBox(width: 4),
+              Icon(
+                Icons.keyboard_arrow_up_rounded,
+                size: 20,
+                color: Colors.white,
+              ),
+            ],
+          ),
         ),
       ),
     );

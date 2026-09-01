@@ -49,6 +49,13 @@ dependencies:
   tflite_flutter: ^0.12.0    # COCO SSD MobileNet，端上找車體 bbox
   http: ^1.6.0               # 呼叫 api/ 的 L1 / finalize
 
+  # 行駛中 Bottom Sheet 的狀態要撐過 App 被殺掉再開，所以租用狀態與 Sheet 高度
+  # 寫在 key-value store 裡，而不是留在 route 的 State。
+  shared_preferences: ^2.5.5
+  # 還車後的「已確認車內整潔」推播。Android 13+ 要 POST_NOTIFICATIONS，
+  # iOS 要 UNUserNotificationCenter 授權，兩邊都由這個套件自己要。
+  flutter_local_notifications: ^22.3.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

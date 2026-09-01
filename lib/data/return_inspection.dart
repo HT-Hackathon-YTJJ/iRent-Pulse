@@ -51,21 +51,23 @@ enum CaptureSpot {
     label: '右前',
     art: 'right_front',
     guideAspect: 1.8966,
+    guideBleed: -0.16,
   ),
   frontLeft(
     label: '左前',
     art: 'left_front',
     guideAspect: 1.8966,
+    guideBleed: 0.16,
   ),
   rearRight(
     label: '右後',
     art: 'right_back',
-    guideAspect: 1.8000,
+    guideAspect: 1.8333,
   ),
   rearLeft(
     label: '左後',
     art: 'left_back',
-    guideAspect: 1.8333,
+    guideAspect: 1.8000,
   );
 
   const CaptureSpot({
@@ -75,6 +77,7 @@ enum CaptureSpot {
     this.screenTitle = '車身拍照',
     this.instruction = '請拍攝車輛四角（含車牌）',
     this.isCorner = true,
+    this.guideBleed = 0,
   });
 
   /// Short name used inside the copy ("**右後** 照片有不明亮點…").
@@ -100,6 +103,25 @@ enum CaptureSpot {
   /// the guide-overlap check, can say anything about.
   final bool isCorner;
 
+  /// How far the silhouette is allowed to run off one edge of the screen, as a
+  /// fraction of its own width. Negative bleeds off the **left** edge, positive
+  /// off the right; 0 keeps the whole shape on screen.
+  ///
+  /// A guide that fits entirely on screen asks the driver to frame the *whole
+  /// car*, which puts them ten paces back and makes the corner they are
+  /// actually documenting — bumper, headlight, wheel arch — a handful of
+  /// pixels wide. Letting the far end of the car run out of frame is what buys
+  /// those pixels: the near corner grows to fill the screen, and the features
+  /// the driver aligns against (front bumper line, A-pillar, wheel arch) are
+  /// the ones that stay in it.
+  ///
+  /// So the bleed is always on the side **away from the corner being shot**.
+  /// In the 右前 render the nose sits on the right of the frame, so the tail is
+  /// what runs off the left; 左前 is the mirror. The two rear shots keep the
+  /// whole shape: the tail is the subject there, and both rear corners want the
+  /// number plate in frame.
+  final double guideBleed;
+
   /// Strip indicator shown while the slot is still empty. 72×72, sized to the
   /// tile exactly as the design repo exported it.
   String get slotIcon => '$_kAssetRoot/slots/$art.png';
@@ -107,6 +129,16 @@ enum CaptureSpot {
   /// Alignment silhouette laid over the live frame. White with a soft alpha
   /// edge, tinted per [AimState] at paint time.
   String get guideAsset => '$_kAssetRoot/guide/$art.png';
+
+  /// The 示意圖 itself — the car render, drawn semi-transparent over the live
+  /// frame underneath [guideEdgeAsset].
+  ///
+  /// A flat tinted silhouette can only say "the car goes roughly here". What
+  /// the driver is being asked for is a *repeatable* angle, and repeatable
+  /// means lining real features up against drawn ones: the bumper's lower
+  /// edge, the A-pillar, where the wheel arch meets the sill. Those only exist
+  /// in the render, so the render is what goes on screen.
+  String get guideArtAsset => '$_kAssetRoot/guide/${art}_art.png';
 
   /// The same silhouette as an outline, drawn over [guideAsset]. Registered
   /// pixel for pixel with it, so both go in the same rect.
@@ -132,16 +164,18 @@ enum CaptureSpot {
 /// open, never after the fact. The shutter stays armed in every state — an
 /// off-target frame is warned about, not blocked (Figma scenario ⑥).
 enum AimState {
-  /// 未對準 — nothing recognisable in frame.
+  /// 未對準 — nothing recognisable in frame, or the car is nowhere near the
+  /// outline. Grey.
   off(
     '未對準',
     AppColor.aimOff,
     AppColor.guideOff,
     AppColor.guideOffEdge,
-    '對齊灰色輪廓線',
+    '對齊輪廓線',
   ),
 
-  /// 接近 — the car is found but too small or cropped.
+  /// 接近 — the car is on the outline but at the wrong distance (or the frame
+  /// is soft or badly lit). Amber, and the hint always says which way to walk.
   near('接近', AppColor.aimNear, AppColor.aimNear, AppColor.aimNear, '再靠近一點'),
 
   /// 已對準 — good enough to submit.
@@ -166,8 +200,9 @@ enum AimState {
   /// Badge fill under the header.
   final Color color;
 
-  /// Fill of the alignment silhouette. 灰 → 黃 → 綠, which is the only thing
-  /// on screen that reads at arm's length while the driver is moving.
+  /// Fill of the alignment silhouette, and the tint of its outline.
+  /// **灰 = 未對準・黃 = 距離不對・綠 = 已對準**, which is the only thing on screen
+  /// that reads at arm's length while the driver is moving.
   final Color guideColor;
 
   /// Stroke around that silhouette. Same colour as the fill once the check is

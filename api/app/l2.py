@@ -12,14 +12,19 @@ VLM asked to compare will narrate those differences as damage. Instead:
 
 車輛部位 is the coordinate system precisely because pixels cannot be aligned but
 「左前葉子板」means the same thing in both frames.
+
+Stage B also reads the car's 留言板 — see `board.py` for why, and for the rule
+that a note may only ever move a finding towards 既有. The board is text, so it
+never touches Stage A: no model is shown a sentence about a car it is being
+asked to describe, because a model told "the bumper has a hole" will find one.
 """
 
 import asyncio
 from collections import Counter
 from typing import Any, Dict, List, Optional, Tuple
 
-from . import config, prompts
-from .models import L2Finding, L2Result
+from . import board as board_lib, config, prompts
+from .models import BoardNote, L2Finding, L2Result
 from .openrouter import VlmError, chat_json, encode_image
 
 #: severity ≥ this is what L3 pulls a car off the road for, so these are the
@@ -44,23 +49,55 @@ def _key(damage: Dict[str, Any]) -> Tuple[str, str]:
 
 
 def _diff(
-    ret: Dict[str, Any], base: Optional[Dict[str, Any]]
+    ret: Dict[str, Any],
+    base: Optional[Dict[str, Any]],
+    prior: Optional[board_lib.PriorDamage] = None,
 ) -> List[L2Finding]:
-    """Stage B. Pure code — no model sees both photos."""
+    """Stage B. Pure code — no model sees both photos, or any of the notes.
+
+    Evidence order is fixed and is the whole point of this function: the pickup
+    photograph decides whenever it can, the board decides only where the
+    photograph is silent, and 無法判定 is what is left. A note can turn a 新增
+    into a 既有 or hold one back for review; nothing here lets one create a
+    finding.
+    """
     base_damages = {_key(d): d for d in (base or {}).get("damages", [])}
     base_parts_with_damage = {p for p, _ in base_damages}
     base_visible = set((base or {}).get("visible_parts", []))
     baseline_usable = base is not None and base.get("assessable", False)
+    prior = prior or board_lib.PriorDamage([])
 
     findings: List[L2Finding] = []
     for d in ret.get("damages", []):
         part, dtype = _key(d)
         severity = int(d.get("severity", 1))
         confidence = float(d.get("confidence") or 0.0)
+        note: Optional[BoardNote] = None
 
         if not baseline_usable:
-            verdict = "無法判定"
-            reason = "取車照缺失或不可判讀，無法確認此損傷是否為本趟新增。"
+            # No usable pickup photo. This is where the board earns its keep:
+            # without it every one of these went to 無法判定, and 無法判定 means
+            # rule 5 — the car off the road and the driver waiting on 客服 for a
+            # dent somebody had already written down.
+            noted = prior.exact(part, dtype)
+            related = prior.panel(part)
+            if noted is not None:
+                note = noted
+                verdict = "既有"
+                reason = (
+                    f"取車照缺失或不可判讀，但{board_lib.quote(noted)}已記錄同部位"
+                    f"同類型損傷，判定為既有。"
+                )
+            elif related is not None:
+                note = related
+                verdict = "無法判定"
+                reason = (
+                    f"取車照缺失或不可判讀；{board_lib.quote(related)}提到同一部位，"
+                    f"但描述的損傷類型不同，需人工確認。"
+                )
+            else:
+                verdict = "無法判定"
+                reason = "取車照缺失或不可判讀，無法確認此損傷是否為本趟新增。"
         elif (part, dtype) in base_damages:
             verdict = "既有"
             reason = f"取車照同部位已見相同類型損傷（{base_damages[(part, dtype)].get('desc', '')}）。"
@@ -71,11 +108,34 @@ def _diff(
             verdict = "既有"
             reason = "取車照同部位已有損傷，本次差異未達拉車門檻，保守視為既有。"
         elif part in base_visible:
-            verdict = "新增"
-            reason = f"還車照見{d.get('desc', dtype)}；取車照同部位清晰可見且無此損傷。"
+            # The pickup photo shows this panel clean. A photograph beats
+            # testimony, so a note cannot make this 既有 — but a *confirmed*
+            # note saying otherwise means two records disagree, and the driver
+            # standing in front of us is not the right person to lose that
+            # argument. It goes to a human instead of onto their bill.
+            noted = prior.exact(part, dtype)
+            if noted is not None and noted.confirmed:
+                note = noted
+                verdict = "無法判定"
+                reason = (
+                    f"取車照同部位清晰且無此損傷，但{board_lib.quote(noted)}"
+                    f"已由人工確認為既有，兩者矛盾，需人工複核。"
+                )
+            else:
+                verdict = "新增"
+                reason = f"還車照見{d.get('desc', dtype)}；取車照同部位清晰可見且無此損傷。"
         else:
-            verdict = "無法判定"
-            reason = "該部位在取車照中未清晰入鏡，無法確認是否為本趟新增。"
+            noted = prior.exact(part, dtype)
+            if noted is not None:
+                note = noted
+                verdict = "既有"
+                reason = (
+                    f"該部位在取車照中未清晰入鏡，但{board_lib.quote(noted)}"
+                    f"已記錄同部位同類型損傷，判定為既有。"
+                )
+            else:
+                verdict = "無法判定"
+                reason = "該部位在取車照中未清晰入鏡，無法確認是否為本趟新增。"
 
         findings.append(
             L2Finding(
@@ -85,6 +145,7 @@ def _diff(
                 severity=max(1, min(4, severity)),
                 confidence=confidence,
                 reason=reason,
+                note_id=note.note_id if note is not None else None,
             )
         )
     return findings
@@ -119,12 +180,22 @@ async def confirm(
     car_no: str,
     slot: str,
     baseline_photo_id: Optional[str] = None,
+    notes: Optional[List[BoardNote]] = None,
 ) -> L2Result:
+    """One return frame, confirmed against the pickup frame and the board.
+
+    [notes] must already be filtered to entries written **before this rental
+    started** — see `Store.notes(before=...)`. A note added at the end of this
+    trip is a description of what this driver left behind, and letting it
+    exonerate the same trip would close the loop on itself.
+    """
+    prior = board_lib.PriorDamage(notes or [])
     result = L2Result(
         photo_id=photo_id,
         car_no=car_no,
         baseline_photo_id=baseline_photo_id,
         baseline_available=baseline_image is not None,
+        notes_considered=len(prior.notes),
         model=config.L2_MODEL,
     )
 
@@ -170,7 +241,7 @@ async def confirm(
             # single-pass answer stands and 客服 sees it either way.
             pass
 
-    result.findings = _diff(ret_desc, base_desc)
+    result.findings = _diff(ret_desc, base_desc, prior)
     result.max_new_severity = max(
         (f.severity for f in result.findings if f.verdict == "新增"), default=0
     )

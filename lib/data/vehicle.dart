@@ -538,12 +538,28 @@ const _corollaEquipment = <SpecRow>[
   SpecRow('車身尺碼', '長 4,460 mm × 寬 1,825 mm × 高 1,620 mm'),
 ];
 
+/// 租用履歷 — and, from the service's point of view, this car's 留言板.
+///
+/// [ReturnSession.publishBoard] uploads these when a live return opens, so the
+/// entries a driver read on the booking sheet are the entries L2 weighs against
+/// what it finds half an hour later. `api/app/board.py` parses each one; most
+/// of them name no part and are simply inert, which is the point — the parser
+/// has to be safe on 「空間真的很大」 as well as useful on the one below it.
 const _corollaReviews = <RentalReview>[
   RentalReview(date: '2026/07/31', text: '空間真的很大，搬家超方便，下次還會再租'),
   RentalReview(
     date: '2026/07/28',
     text: '一上車就有濃濃的煙味，座椅上感覺還有煙灰',
     reply: '已派員清潔！感謝您的回報',
+    negative: true,
+  ),
+  // The one that does real work. Without it a driver photographing this dent
+  // gets 無法判定 → 車輛停用 → 客服, for damage the person before them had
+  // already written down; with it, L2 says 既有 and nobody is asked anything.
+  RentalReview(
+    date: '2026/07/25',
+    text: '取車時後保險桿右側就有一個洞，已拍照回報',
+    reply: '已記錄於車況履歷，不會影響您的信用分數',
     negative: true,
   ),
   RentalReview(date: '2026/07/21', text: '車內很乾淨也沒有異味，還車拍照還會送點數，太好了'),

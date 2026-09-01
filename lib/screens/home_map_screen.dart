@@ -2,15 +2,32 @@ import 'package:flutter/material.dart';
 
 import '../data/vehicle.dart';
 import '../design/tokens.dart';
+import '../services/trip_state.dart';
 import '../widgets/back_button.dart';
 import '../widgets/map_backdrop.dart';
 import '../widgets/map_chrome.dart';
 import 'pin_vehicles_sheet.dart';
 import 'side_menu.dart';
 import 'trip_screen.dart';
+import 'vehicle_status_screen.dart';
 
 class HomeMapScreen extends StatefulWidget {
-  const HomeMapScreen({super.key});
+  const HomeMapScreen({super.key, this.resumedTrip});
+
+  /// A rental that survived the process being killed. The map is still built
+  /// first so the back stack is the same one an unlock would have produced —
+  /// finishing the return pops back to exactly this screen — but 車輛資訊 goes
+  /// on top of it before the first frame is over.
+  final ActiveTrip? resumedTrip;
+
+  /// Puts the live map back the way it opens: no pin selected, camera over the
+  /// city centre.
+  ///
+  /// A hook rather than a route argument because the caller is 訂單明細, which
+  /// does not push this screen — it pops the whole stack back down to it. There
+  /// is exactly one map screen in the app and it is always the first route, so
+  /// a single slot is the honest shape for this.
+  static VoidCallback? resetToStart;
 
   @override
   State<HomeMapScreen> createState() => _HomeMapScreenState();
@@ -33,6 +50,10 @@ class _HomeMapScreenState extends State<HomeMapScreen>
   /// already zoomed past it is not pulled back out.
   static const _focusZoom = 16.0;
 
+  /// The zoom the map opens at, and the one it is put back to when something
+  /// asks for 起始位置.
+  static const _homeZoom = 14.6;
+
   RentMode _mode = RentMode.station;
   bool _car = true;
 
@@ -46,9 +67,55 @@ class _HomeMapScreenState extends State<HomeMapScreen>
   int _focusSeq = 0;
 
   @override
+  void initState() {
+    super.initState();
+    HomeMapScreen.resetToStart = _resetToStart;
+    final trip = widget.resumedTrip;
+    if (trip != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _resume(trip));
+    }
+  }
+
+  @override
   void dispose() {
+    if (HomeMapScreen.resetToStart == _resetToStart) {
+      HomeMapScreen.resetToStart = null;
+    }
     _swap.dispose();
     super.dispose();
+  }
+
+  void _resetToStart() {
+    if (!mounted) return;
+    if (_pin != null) _closePin();
+    setState(() {
+      _focus = MapFocus(
+        target: DemoPlace.taichung,
+        minZoom: _homeZoom,
+        seq: ++_focusSeq,
+      );
+    });
+  }
+
+  /// Put the driver back where they were: same car, same stage, same sheet
+  /// height. No transition — this is a restore, not a navigation, and animating
+  /// it would tell the user something just happened when nothing did.
+  void _resume(ActiveTrip trip) {
+    if (!mounted) return;
+    Navigator.of(context).push(
+      PageRouteBuilder<void>(
+        transitionDuration: Duration.zero,
+        reverseTransitionDuration: const Duration(milliseconds: 300),
+        pageBuilder: (_, _, _) => VehicleStatusScreen(
+          vehicle: corollaCross.withPlate(trip.plate),
+          stage: TripStage.values.firstWhere(
+            (s) => s.name == trip.stage,
+            orElse: () => TripStage.driving,
+          ),
+          initialSheetSize: trip.sheetSize > 0 ? trip.sheetSize : null,
+        ),
+      ),
+    );
   }
 
   /// 同站租還 shows a red map-pin glyph inside the white bubble, 路邊租還 a red
@@ -146,7 +213,7 @@ class _HomeMapScreenState extends State<HomeMapScreen>
               Positioned.fill(
                 child: MapBackdrop(
                   center: DemoPlace.taichung,
-                  zoom: 14.6,
+                  zoom: _homeZoom,
                   pins: _pins,
                   bottomPadding: showingPin
                       ? PinVehiclesSheet.collapsedHeight(bottomInset)

@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:io' show File, Platform;
-import 'dart:ui' show Rect, Size;
+import 'dart:ui' show Rect;
 
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
@@ -52,7 +52,7 @@ class CaptureSession extends ChangeNotifier {
   CaptureFailure failure = CaptureFailure.none;
   String? failureDetail;
 
-  AimVerdict verdict = const AimVerdict(state: AimState.off, hint: '對齊灰色輪廓線');
+  AimVerdict verdict = const AimVerdict(state: AimState.off, hint: '對齊輪廓線');
 
   /// Whether the torch is lit, however it got that way.
   bool get torchOn => _torchOn;
@@ -70,7 +70,32 @@ class CaptureSession extends ChangeNotifier {
   DateTime _lastDetection = DateTime.fromMillisecondsSinceEpoch(0);
   int _darkFrames = 0;
   int _brightFrames = 0;
-  Detection? _lastCar;
+
+  double _zoom = 1;
+  double _minZoom = 1;
+  double _maxZoom = 1;
+
+  /// What the driver is looking through, as a **linear** ratio against the
+  /// main lens: 1.0 is the sensor's own field of view, 0.5 the ultra-wide.
+  double get zoom => _zoom;
+  double get minZoom => _minZoom;
+  double get maxZoom => _maxZoom;
+
+  /// Upright width ÷ height of the camera stream, or null before it opens.
+  ///
+  /// The viewfinder needs this to lay the preview out *whole* rather than
+  /// cropped, which is the only way the guide rectangle it draws and the box
+  /// the detector reports can be in the same coordinate space.
+  double? get previewAspect {
+    final preview = _controller?.value.previewSize;
+    final description = _controller?.description;
+    if (preview == null || description == null) return null;
+    final rotated = (description.sensorOrientation % 180) != 0;
+    final width = rotated ? preview.height : preview.width;
+    final height = rotated ? preview.width : preview.height;
+    if (width <= 0 || height <= 0) return null;
+    return width / height;
+  }
 
   /// Run the detector at about 5 Hz. The arithmetic checks run on every frame —
   /// they cost microseconds — but inference is the expensive part and a car
@@ -130,6 +155,7 @@ class CaptureSession extends ChangeNotifier {
       }
       await controller.setFlashMode(FlashMode.off);
       _controller = controller;
+      await _resetZoom(controller);
 
       _detector = await CarDetector.load();
       _evaluator.restart();
@@ -144,58 +170,66 @@ class CaptureSession extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Put the viewfinder on the main lens at its own field of view.
+  ///
+  /// On a multi-camera Android phone the plugin opens the back camera as one
+  /// *logical* device spanning every lens, and it does not necessarily open it
+  /// at 1×. On a Pixel 10 Pro the viewfinder came up somewhere around 2×, which
+  /// is what put the driver several paces further back than the guide expected
+  /// — an entire car park's worth of walking for a photo the main lens could
+  /// have taken from where they stood. CameraX's zoom ratio is defined against
+  /// the main lens, so 1.0 *is* "the best rear camera, uncropped", and asking
+  /// for it explicitly is the fix.
+  Future<void> _resetZoom(CameraController controller) async {
+    try {
+      _minZoom = await controller.getMinZoomLevel();
+      _maxZoom = await controller.getMaxZoomLevel();
+      await setZoom(1);
+    } catch (error) {
+      // A device that will not report its zoom range is left wherever it
+      // opened; nothing else depends on this succeeding.
+      debugPrint('L0: 無法設定鏡頭倍率 — $error');
+    }
+  }
+
+  /// Switch lens magnification. Values outside the device's range are clamped,
+  /// so the 0.5× chip is simply inert on a phone with no ultra-wide.
+  Future<void> setZoom(double value) async {
+    final controller = _controller;
+    if (controller == null) return;
+    final target = value.clamp(_minZoom, _maxZoom).toDouble();
+    try {
+      await controller.setZoomLevel(target);
+      _zoom = target;
+      notifyListeners();
+    } catch (error) {
+      debugPrint('L0: 倍率切換失敗 — $error');
+    }
+  }
+
   /// The cabin shot has no silhouette to line up with, so the guide check is
   /// switched off for it rather than being handed a rectangle that means
   /// nothing.
-  void configure({required Rect? guideRect, required bool requireGuide}) {
-    _evaluator.guideRect = guideRect;
-    _requireGuide = requireGuide;
-  }
-
-  /// Translate a rectangle drawn on screen into the detector's coordinate space.
   ///
-  /// The preview is painted with `BoxFit.cover`, so part of the frame is off
-  /// screen — comparing a screen rectangle against a box the model reported in
-  /// frame coordinates without undoing that crop would silently mis-measure the
-  /// alignment on every phone whose aspect ratio differs from the stream's.
-  Rect? frameRectFor(Rect screenNorm, Size screenSize) {
-    final preview = _controller?.value.previewSize;
-    if (preview == null || screenSize.isEmpty) return null;
-
-    final rotated = (_controller!.description.sensorOrientation % 180) != 0;
-    final uprightWidth = rotated ? preview.height : preview.width;
-    final uprightHeight = rotated ? preview.width : preview.height;
-    if (uprightWidth <= 0 || uprightHeight <= 0) return null;
-
-    final frameAspect = uprightWidth / uprightHeight;
-    final screenAspect = screenSize.width / screenSize.height;
-
-    // Cover crops whichever axis is longer than the screen's, so the guide
-    // shrinks on that axis when expressed in frame coordinates.
-    double Function(double) mapX = (x) => x;
-    double Function(double) mapY = (y) => y;
-    if (frameAspect > screenAspect) {
-      final visible = screenAspect / frameAspect;
-      mapX = (x) => 0.5 + (x - 0.5) * visible;
-    } else {
-      final visible = frameAspect / screenAspect;
-      mapY = (y) => 0.5 + (y - 0.5) * visible;
-    }
-
-    return Rect.fromLTRB(
-      mapX(screenNorm.left).clamp(0.0, 1.0),
-      mapY(screenNorm.top).clamp(0.0, 1.0),
-      mapX(screenNorm.right).clamp(0.0, 1.0),
-      mapY(screenNorm.bottom).clamp(0.0, 1.0),
-    );
+  /// [guideRect] is in **preview-normalised** coordinates — 0–1 across the
+  /// image the driver can see. Because the preview is drawn whole rather than
+  /// cropped to fill, that is the same space the detector reports its boxes in,
+  /// so the shape being scored is pixel-for-pixel the shape on screen.
+  void configure({
+    required Rect? guideRect,
+    required bool requireGuide,
+    bool guideAllowsEdge = false,
+  }) {
+    _evaluator.guideRect = guideRect;
+    _evaluator.guideAllowsEdge = guideAllowsEdge;
+    _requireGuide = requireGuide;
   }
 
   /// Called between slots: the clock that widens the thresholds restarts, so
   /// the driver gets the full strict window for every shot.
   void restartAim() {
     _evaluator.restart();
-    _lastCar = null;
-    verdict = const AimVerdict(state: AimState.off, hint: '對齊灰色輪廓線');
+    verdict = const AimVerdict(state: AimState.off, hint: '對齊輪廓線');
     notifyListeners();
   }
 
@@ -223,10 +257,15 @@ class CaptureSession extends ChangeNotifier {
 
       final now = DateTime.now();
       final detector = _detector;
+      // Only the frames inference actually ran on carry a detection. Handing
+      // the last one down on every frame is how a box that had gone stale kept
+      // the badge green after the car had left the viewfinder; the evaluator
+      // ages what it is given and stops trusting it after AimEvaluator.staleAfter.
+      Detection? fresh;
       if (detector != null &&
           now.difference(_lastDetection) >= _detectInterval) {
         _lastDetection = now;
-        _lastCar = detector.detect(
+        fresh = detector.detect(
           pixels,
           _controller?.description.sensorOrientation ?? 90,
           0.3, // keep low-confidence boxes; the threshold lives in the evaluator
@@ -235,9 +274,10 @@ class CaptureSession extends ChangeNotifier {
 
       verdict = _evaluator.evaluate(
         stats: stats,
-        car: _lastCar,
+        car: fresh,
         detectorAvailable: detector != null,
         requireGuide: _requireGuide,
+        now: now,
       );
       notifyListeners();
     } catch (error) {

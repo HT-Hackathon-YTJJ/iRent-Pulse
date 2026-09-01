@@ -4,6 +4,7 @@ import 'dart:io' show File;
 import 'package:flutter/foundation.dart';
 
 import '../data/return_inspection.dart';
+import '../data/vehicle.dart';
 import '../l0/capture_session.dart';
 import 'inspection_api.dart';
 
@@ -88,6 +89,50 @@ class ReturnSession extends ChangeNotifier {
     live = await api.reachable();
     notifyListeners();
     return live;
+  }
+
+  /// Push this car's 租用履歷 onto the service's 車輛歷程留言板.
+  ///
+  /// The board is the second thing L2 weighs a damage finding against, after
+  /// the pickup photo — see `api/app/board.py`. In this app the board is real
+  /// and visible: it is the 租用履歷 tab the driver read on the booking sheet
+  /// before they ever touched the car. It is just *local*, which would leave
+  /// L2 judging this trip without the one piece of context the driver already
+  /// has.
+  ///
+  /// So it is uploaded when a live return opens, carrying each entry's own
+  /// date. That matters twice over: notes are only prior evidence if they
+  /// predate the rental, and 客服 reading a withheld claim gets the sentence
+  /// with the date the driver saw next to it.
+  ///
+  /// Best effort. A board that fails to upload costs a 既有 verdict that could
+  /// have been reached; it never costs a return.
+  Future<void> publishBoard(List<RentalReview> reviews) async {
+    if (!live || reviews.isEmpty) return;
+    for (final review in reviews) {
+      try {
+        await api.addNote(
+          carNo: carNo,
+          text: review.text,
+          createdAt: _isoFrom(review.date),
+        );
+      } catch (error) {
+        debugPrint('留言板上傳失敗（不影響還車） — $error');
+        return;
+      }
+    }
+  }
+
+  /// `2026/07/28` → `2026-07-28T00:00:00Z`. The board's dates are days, and a
+  /// day is precise enough for a cut-off measured against a rental that starts
+  /// when the first photo is taken.
+  static String? _isoFrom(String date) {
+    final parts = date.split('/');
+    if (parts.length != 3) return null;
+    final y = parts[0].padLeft(4, '0');
+    final m = parts[1].padLeft(2, '0');
+    final d = parts[2].padLeft(2, '0');
+    return '$y-$m-${d}T00:00:00+00:00';
   }
 
   bool get anyScreening =>

@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.l3 import Q_CLEAN, Q_CS, Q_FIX, decide  # noqa: E402
 from app.models import (  # noqa: E402
+    BoardNote,
     L1Result,
     L2Finding,
     L2Result,
@@ -132,3 +133,77 @@ def test_existing_damage_is_never_charged_to_this_trip():
     assert out.rule == 8
     assert out.status is VehicleStatus.rentable
     assert out.history_entries[0]["verdict"] == "既有"
+
+
+# ------------------------------------------------------------------ 留言板 ---
+#
+# The board is not a rule here — L2 already resolved every finding against it.
+# What L3 owes it is carriage: 客服 opening a withheld claim has to land on the
+# sentence that withheld it, not on a foreign key.
+
+
+def _note(text: str = "後保險桿有一個洞") -> BoardNote:
+    return BoardNote(
+        note_id="n1",
+        car_no="RDS-6583",
+        created_at="2026-08-01T09:00:00+00:00",
+        text=text,
+        part="後保險桿中央",
+        type="破裂",
+    )
+
+
+def test_a_finding_that_leaned_on_a_note_carries_it_into_車況履歷():
+    finding = L2Finding(
+        part="後保險桿中央",
+        type="破裂",
+        verdict="既有",
+        severity=2,
+        note_id="n1",
+    )
+    out = decide(
+        order_id="o1",
+        car_no="RDS-6583",
+        l1=[_l1()],
+        l2=[_l2(finding)],
+        notes=[_note()],
+    )
+
+    # 既有 is not a reason to hold the car, so this is still a clean return.
+    assert out.rule == 8
+    assert out.status is VehicleStatus.rentable
+    entry = out.history_entries[0]
+    assert entry["note_id"] == "n1"
+    assert entry["note_text"] == "後保險桿有一個洞"
+
+
+def test_rule_5_says_when_there_is_a_note_to_read():
+    finding = L2Finding(
+        part="後保險桿中央",
+        type="破裂",
+        verdict="無法判定",
+        severity=3,
+        note_id="n1",
+    )
+    out = decide(
+        order_id="o1",
+        car_no="RDS-6583",
+        l1=[_l1()],
+        l2=[_l2(finding)],
+        notes=[_note()],
+    )
+
+    assert out.rule == 5
+    assert out.status is VehicleStatus.out_of_service
+    assert "留言板" in out.explain
+
+
+def test_an_unattributed_undetermined_finding_reads_as_it_always_did():
+    out = decide(
+        order_id="o1",
+        car_no="RDS-6583",
+        l1=[_l1()],
+        l2=[_l2(_finding("無法判定"))],
+    )
+    assert out.rule == 5
+    assert "留言板" not in out.explain

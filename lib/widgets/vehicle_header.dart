@@ -15,6 +15,7 @@ class VehicleHeaderPanel extends StatelessWidget {
     this.leading,
     this.trailing,
     this.showGrabber = true,
+    this.badgesTrailing = false,
   });
 
   final VehicleProfile vehicle;
@@ -22,6 +23,16 @@ class VehicleHeaderPanel extends StatelessWidget {
   final Widget? leading;
   final Widget? trailing;
   final bool showGrabber;
+
+  /// Pushes the badges and [trailing] into one group against the right edge,
+  /// leaving the iRent mark alone on the left.
+  ///
+  /// With a back chevron in the row the badges belong beside it, because the
+  /// chevron is what the eye starts from. Take the chevron away — which is what
+  /// 行駛中 does, since there is nowhere to go back to while the car is out —
+  /// and the mark is left holding the left edge on its own, with the badges
+  /// floating in the middle. Grouping them right gives the row two ends again.
+  final bool badgesTrailing;
 
   @override
   Widget build(BuildContext context) {
@@ -63,7 +74,9 @@ class VehicleHeaderPanel extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 SizedBox(
-                  height: hasLeading ? AppBackButton.size : null,
+                  height: hasLeading || badgesTrailing
+                      ? AppBackButton.size
+                      : null,
                   child: Row(
                     children: [
                       if (hasLeading) ...[leading!, const SizedBox(width: 2)],
@@ -74,39 +87,73 @@ class VehicleHeaderPanel extends StatelessWidget {
                         fit: BoxFit.contain,
                       ),
                       const SizedBox(width: 10),
-                      // The badges are the elastic part of this row: with a
-                      // back button on the left and a state chip on the right
-                      // they no longer fit at their designed size on a narrow
-                      // display. Flex in proportion to their natural widths so
-                      // that when they do have to shrink they shrink together,
-                      // and the gap between them survives on a wide one.
-                      const Expanded(
-                        flex: 3,
-                        child: _Badge(
-                          text: '安心服務',
-                          bg: AppColor.accentBlueSoft,
-                          fg: AppColor.accentBlue,
-                          alignment: Alignment.centerLeft,
+                      if (badgesTrailing)
+                        // One group, right-aligned, scaled as a whole. The
+                        // three pills plus the state chip are 20pt wider than a
+                        // 346dp display, and shrinking them individually left
+                        // them at three different sizes; scaling the group
+                        // keeps them a set.
+                        Expanded(
+                          child: FittedBox(
+                            fit: BoxFit.scaleDown,
+                            alignment: Alignment.centerRight,
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const _Badge(
+                                  text: '安心服務',
+                                  bg: AppColor.accentBlueSoft,
+                                  fg: AppColor.accentBlue,
+                                ),
+                                const SizedBox(width: 8),
+                                const _Badge(
+                                  text: '抗冠空氣清淨',
+                                  bg: AppColor.mint,
+                                  fg: Colors.white,
+                                ),
+                                if (trailing != null) ...[
+                                  const SizedBox(width: 8),
+                                  trailing!,
+                                ],
+                              ],
+                            ),
+                          ),
+                        )
+                      else ...[
+                        // The badges are the elastic part of this row: with a
+                        // back button on the left and a state chip on the right
+                        // they no longer fit at their designed size on a narrow
+                        // display. Flex in proportion to their natural widths so
+                        // that when they do have to shrink they shrink together,
+                        // and the gap between them survives on a wide one.
+                        const Expanded(
+                          flex: 3,
+                          child: _Badge(
+                            text: '安心服務',
+                            bg: AppColor.accentBlueSoft,
+                            fg: AppColor.accentBlue,
+                            alignment: Alignment.centerLeft,
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 8),
-                      const Expanded(
-                        flex: 4,
-                        child: _Badge(
-                          text: '抗冠空氣清淨',
-                          bg: AppColor.mint,
-                          fg: Colors.white,
-                          alignment: Alignment.centerRight,
-                        ),
-                      ),
-                      if (trailing != null) ...[
                         const SizedBox(width: 8),
-                        trailing!,
+                        const Expanded(
+                          flex: 4,
+                          child: _Badge(
+                            text: '抗冠空氣清淨',
+                            bg: AppColor.mint,
+                            fg: Colors.white,
+                            alignment: Alignment.centerRight,
+                          ),
+                        ),
+                        if (trailing != null) ...[
+                          const SizedBox(width: 8),
+                          trailing!,
+                        ],
                       ],
                     ],
                   ),
                 ),
-                SizedBox(height: hasLeading ? 2 : 10),
+                SizedBox(height: hasLeading || badgesTrailing ? 2 : 10),
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
