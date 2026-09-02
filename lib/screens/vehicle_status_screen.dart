@@ -78,10 +78,18 @@ const _stages = <TripStage, _StageData>{
 /// the panel on a sheet keeps the map underneath it and lets the driver push it
 /// out of the way with a thumb, which is the whole point.
 ///
-/// The sheet snaps to three heights and cannot be dismissed: the shallowest
-/// stop still shows the plate, the fuel and 還車. There is no gesture that
-/// makes a running rental disappear — the only way out of this screen is
-/// through the return.
+/// The sheet has two stops and cannot be dismissed. It opens full height —
+/// everything but the status bar, which stays uncovered so the clock and the
+/// battery are not sitting on the sheet's own header — and a pull down takes
+/// it straight to the shallow stop, which still shows the plate, the fuel and
+/// 還車.
+///
+/// Two stops rather than three on purpose. The middle stop showed the fuel
+/// card and half of the next one, which is neither of the two things anyone
+/// opens this screen for: the whole panel, or the map with the panel out of
+/// the way. Every drag ended in one more drag, so the stop in between was a
+/// stop nobody wanted to be at. There is no gesture that makes a running
+/// rental disappear — the only way out of this screen is through the return.
 class VehicleStatusScreen extends StatefulWidget {
   const VehicleStatusScreen({
     super.key,
@@ -93,8 +101,8 @@ class VehicleStatusScreen extends StatefulWidget {
   final VehicleProfile vehicle;
   final TripStage stage;
 
-  /// Where the sheet was left last time, restored by [TripStore]. Null opens at
-  /// the middle stop.
+  /// Where the sheet was left last time, restored by [TripStore]. Null opens
+  /// full height.
   final double? initialSheetSize;
 
   @override
@@ -103,26 +111,70 @@ class VehicleStatusScreen extends StatefulWidget {
 
 class _VehicleStatusScreenState extends State<VehicleStatusScreen>
     with WidgetsBindingObserver {
-  /// Three stops. The shallowest is deliberately past half: the fuel card and
-  /// 還車 have to stay on screen at every stop, or collapsing the sheet would
-  /// mean losing the controls rather than seeing more map.
-  static const _minSheet = 0.45;
-  static const _midSheet = 0.74;
-  static const _maxSheet = 0.96;
-  static const _snapSizes = <double>[_minSheet, _midSheet, _maxSheet];
+  /// The shallow stop. The fuel card and 還車 stay on screen here, so
+  /// collapsing the sheet means seeing more map rather than losing the
+  /// controls.
+  static const _minSheet = 0.40;
+
+  /// Fallback for the frame before the media query is known.
+  static const _defaultMaxSheet = 0.94;
+
+  /// The tallest the sheet goes: the whole screen less the notification bar.
+  /// A fraction of a screen height the widget cannot know until it is in a
+  /// tree, so it is recomputed in [didChangeDependencies] — the old fixed 0.96
+  /// was more than the status bar leaves on most handsets, which is what put
+  /// the header underneath it.
+  double _maxSheet = _defaultMaxSheet;
+
+  /// Held as one list rather than rebuilt per frame:
+  /// [DraggableScrollableSheet] compares `snapSizes` by identity, and a new
+  /// list every build reads to it as "the stops changed" — which schedules a
+  /// re-snap after the frame and cancels any scroll animation in flight.
+  List<double> _snapSizes = const [_minSheet, _defaultMaxSheet];
 
   final _sheet = DraggableScrollableController();
 
   late TripStage _stage = widget.stage;
-  late final double _initialSize =
-      (widget.initialSheetSize ?? _midSheet).clamp(_minSheet, _maxSheet);
+
+  /// Where the sheet opens. A restored height is honoured — the driver put it
+  /// there — and anything else opens full.
+  ///
+  /// Resolved in [didChangeDependencies], not in [initState]: it is measured
+  /// against [_maxSheet], and [_maxSheet] is not known until there is a media
+  /// query to read. Working it out a frame earlier is what had the sheet
+  /// opening at the fallback height instead of flush under the status bar.
+  double _initialSize = _defaultMaxSheet;
 
   _StageData get _data => _stages[_stage]!;
+
+  /// False until the sheet's opening height has been settled and written out.
+  bool _started = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final media = MediaQuery.of(context);
+    final height = media.size.height;
+    // 1 − the notification bar, as a fraction.
+    final max = height <= 0
+        ? _defaultMaxSheet
+        : (1 - media.padding.top / height).clamp(_minSheet + 0.02, 1.0);
+    if (max != _maxSheet) {
+      _maxSheet = max;
+      _snapSizes = [_minSheet, max];
+    }
+    if (_started) return;
+    _started = true;
+    _initialSize = (widget.initialSheetSize ?? _maxSheet).clamp(
+      _minSheet,
+      _maxSheet,
+    );
     // Idempotent, and it covers both ways onto this screen: a fresh unlock and
     // a cold start that restored one. Whichever it was, the store now agrees
     // with what is on screen.

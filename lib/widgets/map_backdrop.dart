@@ -18,50 +18,150 @@ class DemoPlace {
   static const taichung = LatLng(24.1548, 120.6640);
 }
 
-/// Where the demo scatters its pins around [DemoPlace.taichung]:
-/// (Δlat, Δlng, PRO badge, bubble colour).
+/// Badge and bubble colour of each of the eight demo pins, in pin order.
 ///
-/// Shared so the map screen and the pin screen draw exactly the same map —
-/// tapping a pin must not shuffle the other pins around.
-const demoPinOffsets = <(double, double, bool, Color)>[
-  (0.0042, 0.0031, false, AppColor.brand),
-  (-0.0051, 0.0012, false, AppColor.brand),
-  (0.0018, -0.0044, true, AppColor.brand),
-  (-0.0032, -0.0036, false, AppColor.warning),
-  (0.0064, -0.0009, false, AppColor.textPrimary),
-  (-0.0015, 0.0055, false, AppColor.brand),
-  (0.0035, 0.0062, false, AppColor.brand),
-  (-0.0068, 0.0048, true, AppColor.brand),
+/// Fixed, while the *positions* are not: the field is scattered afresh around
+/// wherever the phone turns out to be, but a station that came up PRO stays
+/// PRO, so the map has the same mix of markers on it in every city.
+const _pinStyles = <(bool, Color)>[
+  (false, AppColor.brand),
+  (false, AppColor.brand),
+  (true, AppColor.brand),
+  (false, AppColor.warning),
+  (false, AppColor.textPrimary),
+  (false, AppColor.brand),
+  (false, AppColor.brand),
+  (true, AppColor.brand),
 ];
 
-/// Where the pin with [index] sits, so a screen can aim its camera at the pin
-/// it just selected without reaching into [demoPinOffsets] itself.
-LatLng demoPinLocation(int index) {
-  final offset = demoPinOffsets[index % demoPinOffsets.length];
-  return LatLng(
-    DemoPlace.taichung.latitude + offset.$1,
-    DemoPlace.taichung.longitude + offset.$2,
-  );
+/// The station markers on the map, and where they sit.
+///
+/// There are exactly [count] of them because the card deck behind the pins is
+/// indexed by pin (see `PinDeck` in `data/vehicle.dart`) — a pin without a
+/// fleet behind it would open an empty sheet.
+///
+/// Two ways to get one. [StationField.demo] is the scripted scatter around
+/// Taichung, which is what the reference screenshots show and what the map
+/// opens on before the device has answered with a fix. [StationField.around]
+/// builds a fresh field about wherever the driver actually is, which is the
+/// one the app uses in the hand: a map of stations in Taichung is not a demo
+/// of "cars near you" when you are running it in Tainan.
+@immutable
+class StationField {
+  const StationField._(this.centre, this.points);
+
+  /// What the field was scattered around — the device's position, or the
+  /// scripted city centre.
+  final LatLng centre;
+
+  final List<LatLng> points;
+
+  static const count = 8;
+
+  /// How far out the generated stations reach. Roughly a ten-minute walk at
+  /// the far edge and never on top of the blue dot, so the field reads as
+  /// "stations near you" rather than "stations under your thumb".
+  static const _minRadiusMetres = 180.0;
+  static const _maxRadiusMetres = 1100.0;
+
+  /// The scripted scatter around [DemoPlace.taichung].
+  static final demo = StationField._(DemoPlace.taichung, const [
+    LatLng(24.1590, 120.6671),
+    LatLng(24.1497, 120.6652),
+    LatLng(24.1566, 120.6596),
+    LatLng(24.1516, 120.6604),
+    LatLng(24.1612, 120.6631),
+    LatLng(24.1533, 120.6695),
+    LatLng(24.1583, 120.6702),
+    LatLng(24.1480, 120.6688),
+  ]);
+
+  /// [count] stations scattered around [centre], at even-ish bearings with a
+  /// random wobble on each.
+  ///
+  /// Seeded on the coordinate rounded to about 100m, which is what stops the
+  /// field from reshuffling itself: the 定位 button and every later fix hand in
+  /// a position a few metres off the last one, and a field rebuilt from a raw
+  /// coordinate would deal a new hand of stations each time — pins sliding
+  /// around under a user who only asked to be re-centred.
+  factory StationField.around(LatLng centre) {
+    final rng = math.Random(
+      Object.hash(
+        (centre.latitude * 1000).round(),
+        (centre.longitude * 1000).round(),
+      ),
+    );
+    // A metre is the same distance north wherever you are; east it shrinks
+    // with the cosine of the latitude, or the field would look squashed at
+    // one latitude and stretched at another.
+    final latPerMetre = 1 / 111320.0;
+    final lngPerMetre =
+        1 / (111320.0 * math.cos(centre.latitude * math.pi / 180).abs().clamp(0.05, 1.0));
+
+    return StationField._(centre, [
+      for (var i = 0; i < count; i++)
+        () {
+          // Even sectors with a wobble inside each: pure randomness clumps,
+          // and a clump of stations on one side of the dot looks like a bug.
+          final bearing =
+              (i + rng.nextDouble() * 0.8 - 0.4) * 2 * math.pi / count;
+          final distance =
+              _minRadiusMetres +
+              rng.nextDouble() * (_maxRadiusMetres - _minRadiusMetres);
+          return LatLng(
+            centre.latitude + math.cos(bearing) * distance * latPerMetre,
+            centre.longitude + math.sin(bearing) * distance * lngPerMetre,
+          );
+        }(),
+    ]);
+  }
+
+  LatLng at(int index) => points[index % points.length];
+
+  /// The station closest to [from] — what 立即預約 opens on.
+  ///
+  /// Compared on a plain squared distance in degrees with the longitude scaled
+  /// to match: the field spans a kilometre or two, where the difference
+  /// between that and a great-circle distance is far below the accuracy of the
+  /// fix it is measured from.
+  int nearestTo(LatLng from) {
+    final lngScale = math.cos(from.latitude * math.pi / 180).abs();
+    var best = 0;
+    var bestDistance = double.infinity;
+    for (var i = 0; i < points.length; i++) {
+      final dLat = points[i].latitude - from.latitude;
+      final dLng = (points[i].longitude - from.longitude) * lngScale;
+      final distance = dLat * dLat + dLng * dLng;
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = i;
+      }
+    }
+    return best;
+  }
+
+  /// This field's pins for [mode]. [onTap] receives the pin's index; the pin
+  /// at [selected] is drawn in its focused style.
+  ///
+  /// 同站租還 shows a red map-pin glyph inside the white bubble, 路邊租還 a red
+  /// car — exactly like the production app.
+  List<MapPin> mapPins({
+    required bool station,
+    required void Function(int index) onTap,
+    int? selected,
+  }) => [
+    for (var i = 0; i < points.length; i++)
+      MapPin(
+        point: points[i],
+        color: _pinStyles[i % _pinStyles.length].$2,
+        pro: _pinStyles[i % _pinStyles.length].$1,
+        icon: station ? Icons.location_on : Icons.directions_car,
+        iconSize: station ? 21 : 17,
+        selected: i == selected,
+        onTap: () => onTap(i),
+      ),
+  ];
 }
-
-/// The demo's pins for [mode]. [onTap] receives the pin's index; the pin at
-/// [selected] is drawn in its focused style.
-List<MapPin> demoMapPins({
-  required bool station,
-  required void Function(int index) onTap,
-  int? selected,
-}) => [
-  for (var i = 0; i < demoPinOffsets.length; i++)
-    MapPin(
-      point: demoPinLocation(i),
-      color: demoPinOffsets[i].$4,
-      pro: demoPinOffsets[i].$3,
-      icon: station ? Icons.location_on : Icons.directions_car,
-      iconSize: station ? 21 : 17,
-      selected: i == selected,
-      onTap: () => onTap(i),
-    ),
-];
 
 /// A station / vehicle marker, independent of which basemap is rendering it.
 class MapPin {
@@ -164,6 +264,7 @@ class MapBackdrop extends StatelessWidget {
     this.interactive = true,
     this.pins = const [],
     this.showUserDot = true,
+    this.userLocation,
     this.showAttribution = true,
     this.bottomPadding = 0,
     this.focus,
@@ -175,6 +276,13 @@ class MapBackdrop extends StatelessWidget {
   final bool interactive;
   final List<MapPin> pins;
   final bool showUserDot;
+
+  /// Where to draw the blue dot. Null falls back to [center], which is what
+  /// the scripted screens want — they open on a coordinate that *is* where the
+  /// driver is meant to be standing. The live map passes the device's own fix,
+  /// so the dot stops being scenery and starts being the user.
+  final LatLng? userLocation;
+
   final bool showAttribution;
 
   /// Tap on the basemap itself, i.e. not on a pin. Screens use it to dismiss
@@ -201,6 +309,7 @@ class MapBackdrop extends StatelessWidget {
         interactive: interactive,
         pins: pins,
         showUserDot: showUserDot,
+        userLocation: userLocation,
         bottomPadding: bottomPadding,
         focus: focus,
         onMapTap: onMapTap,
@@ -212,6 +321,7 @@ class MapBackdrop extends StatelessWidget {
       interactive: interactive,
       pins: pins,
       showUserDot: showUserDot,
+      userLocation: userLocation,
       showAttribution: showAttribution,
       bottomPadding: bottomPadding,
       focus: focus,
@@ -243,6 +353,7 @@ class _OsmBackdrop extends StatefulWidget {
     required this.interactive,
     required this.pins,
     required this.showUserDot,
+    required this.userLocation,
     required this.showAttribution,
     required this.bottomPadding,
     required this.focus,
@@ -254,6 +365,7 @@ class _OsmBackdrop extends StatefulWidget {
   final bool interactive;
   final List<MapPin> pins;
   final bool showUserDot;
+  final LatLng? userLocation;
   final bool showAttribution;
   final double bottomPadding;
   final MapFocus? focus;
@@ -379,7 +491,7 @@ class _OsmBackdropState extends State<_OsmBackdrop>
           fm.MarkerLayer(
             markers: [
               fm.Marker(
-                point: widget.center,
+                point: widget.userLocation ?? widget.center,
                 width: 26,
                 height: 26,
                 child: const _UserDot(),
@@ -429,6 +541,7 @@ class _GoogleBackdrop extends StatefulWidget {
     required this.interactive,
     required this.pins,
     required this.showUserDot,
+    required this.userLocation,
     required this.bottomPadding,
     required this.focus,
     required this.onMapTap,
@@ -439,6 +552,7 @@ class _GoogleBackdrop extends StatefulWidget {
   final bool interactive;
   final List<MapPin> pins;
   final bool showUserDot;
+  final LatLng? userLocation;
   final double bottomPadding;
   final MapFocus? focus;
   final VoidCallback? onMapTap;
@@ -571,13 +685,11 @@ class _GoogleBackdropState extends State<_GoogleBackdrop> {
 
     final dot = _markerBitmaps[_userDotKey];
     if (widget.showUserDot && dot != null) {
+      final at = widget.userLocation ?? widget.center;
       markers.add(
         gmap.Marker(
           markerId: const gmap.MarkerId('user'),
-          position: gmap.LatLng(
-            widget.center.latitude,
-            widget.center.longitude,
-          ),
+          position: gmap.LatLng(at.latitude, at.longitude),
           icon: dot,
           anchor: const Offset(0.5, 0.5),
         ),

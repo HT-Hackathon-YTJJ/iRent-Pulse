@@ -10,8 +10,8 @@ import 'package:irent_pulse/data/return_inspection.dart';
 /// reported "the last two are swapped", which was the only symptom the bug had.
 void main() {
   const body = [
-    CaptureSpot.frontRight,
     CaptureSpot.frontLeft,
+    CaptureSpot.frontRight,
     CaptureSpot.rearRight,
     CaptureSpot.rearLeft,
   ];
@@ -21,19 +21,20 @@ void main() {
       '加油卡/停車卡',
       '前座',
       '後座',
-      '右前',
       '左前',
+      '右前',
       '右後',
       '左後',
     ]);
   });
 
-  test('the rear pair is shot right before left', () {
-    // 順時針繞車一圈: the rear-right corner comes before the rear-left one, so
-    // the driver never has to cross back over the car they just photographed.
+  test('the four body shots are one lap of the car, not two', () {
+    // 左前 → 右前 → 右後 → 左後: across the nose, down the passenger side,
+    // across the tail. Any other order sends the driver back past a corner
+    // they have already shot.
     expect(
-      CaptureSpot.values.indexOf(CaptureSpot.rearRight),
-      lessThan(CaptureSpot.values.indexOf(CaptureSpot.rearLeft)),
+      CaptureSpot.values.where((s) => s.isCorner).toList(),
+      body,
     );
   });
 
@@ -48,16 +49,27 @@ void main() {
     expect(CaptureSpot.rearLeft.art, 'left_back');
   });
 
-  test('only the two front shots bleed, and they bleed opposite ways', () {
-    expect(CaptureSpot.frontRight.guideBleed, lessThan(0));
+  test('every body shot bleeds, alternating side down the strip', () {
+    // The bleed is what makes the outline big enough to aim with — a guide
+    // that fits entirely on screen asks for the whole car and shrinks the
+    // corner being documented to nothing. It alternates because the walk does:
+    // each shot keeps its margin on the side the driver has just come from.
     expect(CaptureSpot.frontLeft.guideBleed, greaterThan(0));
+    expect(CaptureSpot.frontRight.guideBleed, lessThan(0));
+    expect(CaptureSpot.rearRight.guideBleed, greaterThan(0));
+    expect(CaptureSpot.rearLeft.guideBleed, lessThan(0));
     expect(
       CaptureSpot.frontRight.guideBleed,
       -CaptureSpot.frontLeft.guideBleed,
       reason: '兩張車頭照必須是彼此的鏡像',
     );
-    for (final spot in [CaptureSpot.rearRight, CaptureSpot.rearLeft]) {
-      expect(spot.guideBleed, 0, reason: '${spot.label} 要看得到車牌');
+    expect(
+      CaptureSpot.rearLeft.guideBleed,
+      -CaptureSpot.rearRight.guideBleed,
+      reason: '兩張車尾照必須是彼此的鏡像',
+    );
+    for (final spot in CaptureSpot.values.where((s) => !s.isCorner)) {
+      expect(spot.guideBleed, 0, reason: '${spot.label} 沒有車體輪廓可以出血');
     }
   });
 

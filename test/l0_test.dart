@@ -202,7 +202,7 @@ void main() {
     test('a car filling the frame is asked to step back', () {
       final verdict = run(
         evaluator(),
-        detection: car(const Rect.fromLTRB(0.03, 0.03, 0.97, 0.97)),
+        detection: car(const Rect.fromLTRB(0.01, 0.01, 0.99, 0.99)),
       );
       expect(verdict.hint, '請再退後一步');
     });
@@ -284,7 +284,7 @@ void main() {
       final e = evaluator(guide: guide);
       final verdict = run(
         e,
-        detection: car(const Rect.fromLTRB(0.06, 0.52, 0.94, 0.98)),
+        detection: car(const Rect.fromLTRB(0.06, 0.06, 0.94, 0.52)),
       );
       expect(verdict.fill, closeTo(1, 0.05), reason: '大小其實是對的');
       expect(verdict.drift, greaterThan(const AimThresholds().maxDrift));
@@ -308,7 +308,7 @@ void main() {
       final e = evaluator(guide: guide, allowsEdge: true);
       final verdict = run(
         e,
-        detection: car(const Rect.fromLTRB(0.0, 0.2, 1.0, 0.95)),
+        detection: car(const Rect.fromLTRB(0.0, 0.05, 1.0, 1.0)),
       );
       expect(verdict.fill, greaterThan(const AimThresholds().maxFill));
       expect(verdict.hint, '請再退後一步');

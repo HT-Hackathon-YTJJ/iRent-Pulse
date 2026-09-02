@@ -99,7 +99,14 @@ class _TripScreenState extends State<TripScreen> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  VehicleHeaderPanel(vehicle: _vehicle, compact: true),
+                  // No grabber: this panel is pinned to the bottom of the
+                  // 開鎖 screen and there is nothing above it to pull up to, so
+                  // the handle was promising a gesture the page does not have.
+                  VehicleHeaderPanel(
+                    vehicle: _vehicle,
+                    compact: true,
+                    showGrabber: false,
+                  ),
                   BottomActionBar(
                     shadow: false,
                     child: Row(

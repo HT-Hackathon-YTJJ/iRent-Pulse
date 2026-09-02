@@ -112,19 +112,34 @@ class AimVerdict {
 ///
 /// Both are scale-free, so they mean the same thing on every handset and for
 /// every one of the four body angles, which the raw pixel thresholds did not.
+///
+/// **Widened after the second round of QA.** The numbers below are looser than
+/// the ones the spec opens with, and deliberately so: the reported failure was
+/// 「對準了還是說未對準」, which is the expensive direction to be wrong in. A
+/// frame let through slightly off costs one imperfect photo that L1 still
+/// reads; a frame held back that was fine costs a driver standing in a car
+/// park shuffling back and forth at a badge that will not turn green, and some
+/// of those drivers stop trying.
+///
+/// The two that were doing the rejecting are [maxDrift] and [minIou]: both
+/// feed 未對準, and both were tuned against a silhouette rather than against a
+/// detector's bounding box, which is a looser, shadow-inclusive, wing-mirror-
+/// inclusive rectangle around the same car. [minFill] came down with them
+/// because a bounding box drawn tight to the metal is smaller than the
+/// outline it is being measured against almost by construction.
 class AimThresholds {
   const AimThresholds({
-    this.minScore = 0.45,
-    this.minCoverage = 0.20,
-    this.maxCoverage = 0.86,
-    this.edgeMargin = 0.015,
-    this.blurFloor = 80,
-    this.maxOverExposed = 0.15,
-    this.maxUnderExposed = 0.15,
-    this.minFill = 0.78,
-    this.maxFill = 1.28,
-    this.maxDrift = 0.15,
-    this.minIou = 0.42,
+    this.minScore = 0.35,
+    this.minCoverage = 0.15,
+    this.maxCoverage = 0.92,
+    this.edgeMargin = 0.008,
+    this.blurFloor = 55,
+    this.maxOverExposed = 0.22,
+    this.maxUnderExposed = 0.22,
+    this.minFill = 0.62,
+    this.maxFill = 1.45,
+    this.maxDrift = 0.22,
+    this.minIou = 0.26,
   });
 
   final double minScore;
@@ -169,14 +184,18 @@ class AimThresholds {
 class AimEvaluator {
   AimEvaluator({
     this.base = const AimThresholds(),
-    this.holdFrames = 5,
+    this.holdFrames = 3,
     this.guideRect,
     this.guideAllowsEdge = false,
   });
 
   final AimThresholds base;
 
-  /// 連續確認 — how many passing frames in a row arm the shutter (~0.3s).
+  /// 連續確認 — how many passing frames in a row arm the shutter (~0.2s at the
+  /// stream's 5 Hz). Three rather than five: the box is already exponentially
+  /// smoothed, so the streak is there to reject a car that flashed past, not
+  /// to smooth anything, and five frames was a visible beat between "this
+  /// looks right" and the badge agreeing.
   final int holdFrames;
 
   /// The on-screen outline, in the same upright normalised space as the boxes.
@@ -209,9 +228,13 @@ class AimEvaluator {
   /// that had left the frame ten seconds ago.
   static const Duration staleAfter = Duration(milliseconds: 700);
 
-  /// 0–15s strict, 15–30s widened 20%, 30s+ manual shutter offered.
-  static const Duration relaxAfter = Duration(seconds: 15);
-  static const Duration manualAfter = Duration(seconds: 30);
+  /// 0–8s strict, 8–24s widened 20%, 24s+ manual shutter offered.
+  ///
+  /// Eight seconds because that is about how long someone tries before they
+  /// start to think the thing is broken; fifteen was long enough that the
+  /// widening arrived after they had already given up on it.
+  static const Duration relaxAfter = Duration(seconds: 8);
+  static const Duration manualAfter = Duration(seconds: 24);
 
   void restart() {
     _openedAt = DateTime.now();

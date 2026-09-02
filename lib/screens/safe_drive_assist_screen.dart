@@ -10,9 +10,16 @@ import 'vehicle_status_screen.dart';
 
 /// 安心上路輔助 — interactive walkthrough of the car's controls.
 ///
-/// Presented as a Material draggable sheet over the map: it can be pulled
-/// between 40% and 94% of the screen, snaps to three stops, and can never be
-/// flung away — closing is deliberate, through the ✕ in the header.
+/// Presented as a Material draggable sheet over the map: it opens full height,
+/// can be pulled down to 40% of the screen, snaps between the stops, and can
+/// never be flung away — closing is deliberate, through the ✕ in the header.
+///
+/// It opens *full* because of what it is: the driver has just said yes to a
+/// walkthrough of a car they have never sat in, and the first thing they see
+/// should be the walkthrough rather than a map they were looking at a moment
+/// ago. The one thing full height does not mean is the whole screen — the
+/// status bar stays uncovered, or the clock and the battery end up on top of
+/// the sheet's own title.
 class SafeDriveAssistScreen extends StatefulWidget {
   const SafeDriveAssistScreen({
     super.key,
@@ -35,8 +42,23 @@ class SafeDriveAssistScreen extends StatefulWidget {
 class _SafeDriveAssistScreenState extends State<SafeDriveAssistScreen> {
   static const _minSheet = 0.40;
   static const _midSheet = 0.72;
-  static const _maxSheet = 0.94;
-  static const _snapSizes = <double>[_minSheet, _midSheet, _maxSheet];
+
+  /// Fallback for the frame before the media query is known.
+  static const _defaultMaxSheet = 0.94;
+
+  /// The tallest the sheet goes: everything but the status bar. Recomputed in
+  /// [didChangeDependencies] because it is a fraction of a screen height the
+  /// widget does not know until it is in a tree.
+  double _maxSheet = _defaultMaxSheet;
+
+  /// Held as one list rather than rebuilt per frame.
+  ///
+  /// [DraggableScrollableSheet] compares `snapSizes` by identity, and a fresh
+  /// list every build reads as "the stops changed" — which schedules a
+  /// re-snap after the frame, and that re-snap cancels whatever scroll
+  /// animation is running. It is exactly the sort of bug that only shows up as
+  /// "tapping a diagram marker no longer scrolls the list".
+  List<double> _snapSizes = const [_minSheet, _midSheet, _defaultMaxSheet];
 
   /// Fixed chrome above the diagram, so the column can never overflow.
   static const _headerHeight = 74.0;
@@ -52,6 +74,21 @@ class _SafeDriveAssistScreenState extends State<SafeDriveAssistScreen> {
   int? _selected;
 
   AssistSection get _section => widget.vehicle.sectionById(_sectionId);
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final media = MediaQuery.of(context);
+    final height = media.size.height;
+    // 1 − the notification bar, as a fraction. Runs before the first build, so
+    // initialChildSize below already gets the real number.
+    final max = height <= 0
+        ? _defaultMaxSheet
+        : (1 - media.padding.top / height).clamp(_midSheet + 0.02, 1.0);
+    if (max == _maxSheet) return;
+    _maxSheet = max;
+    _snapSizes = [_minSheet, _midSheet, max];
+  }
 
   @override
   void dispose() {
@@ -178,7 +215,7 @@ class _SafeDriveAssistScreenState extends State<SafeDriveAssistScreen> {
             ),
             DraggableScrollableSheet(
               controller: _sheet,
-              initialChildSize: _midSheet,
+              initialChildSize: _maxSheet,
               minChildSize: _minSheet,
               maxChildSize: _maxSheet,
               snap: true,

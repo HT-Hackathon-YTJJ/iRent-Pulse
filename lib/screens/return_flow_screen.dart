@@ -83,6 +83,18 @@ class _ReturnFlowScreenState extends State<ReturnFlowScreen> {
   /// True when the backend answered and this run is doing the real thing.
   bool get _live => _session.live && _scenario == ReturnScenario.live;
 
+  /// True when the flow opened wanting the live path and nothing answered.
+  ///
+  /// The screens are then exactly the scripted 情境① — every photo readable,
+  /// the cabin clean — because that is the only verdict an app with no
+  /// analysis behind it is entitled to reach. What this flag adds is the
+  /// ending: 情境① is documented as 事後零通知, and a run that *tried* to be
+  /// real has to finish with the push, or a demo on a dead network stops one
+  /// screen short of the point it is making.
+  ///
+  /// Only ever set by [_probe], so picking ① by hand still gets its silence.
+  bool _offline = false;
+
   @override
   void initState() {
     super.initState();
@@ -93,7 +105,13 @@ class _ReturnFlowScreenState extends State<ReturnFlowScreen> {
   /// is not, the scripted board plays and nothing about the demo changes.
   Future<void> _probe() async {
     final reachable = await _session.probe();
-    if (!mounted || !reachable) return;
+    if (!mounted) return;
+    if (!reachable) {
+      if (widget.scenario == ReturnScenario.allClear) {
+        setState(() => _offline = true);
+      }
+      return;
+    }
     // Before any photo is taken, so every note predates the rental L2 is about
     // to judge. `Order.started_at` is stamped by the first L1 upload.
     unawaited(_session.publishBoard(widget.vehicle.reviews));
@@ -117,6 +135,9 @@ class _ReturnFlowScreenState extends State<ReturnFlowScreen> {
     // A previous run's verdict must not land on top of the new one.
     ReturnNotifications.instance.cancelPending();
     _scenario = scenario;
+    // Hand-picking a scenario takes the run off the offline path: ① is then
+    // being demonstrated for itself, silence included.
+    _offline = false;
     _taken = {};
     _pending = _allSpots.toSet();
     _frames.clear();
@@ -193,13 +214,17 @@ class _ReturnFlowScreenState extends State<ReturnFlowScreen> {
       unawaited(
         _session.finalizeInBackground().then((_) {
           final message = _session.decision?.notifyUser;
-          if (message == null) return;
           _deliver([
-            ReturnNotice(
-              body: message,
-              age: 'just now',
-              delay: const Duration(seconds: 1),
-            ),
+            // No message means L2/L3 either found nothing worth saying or
+            // never answered at all. Both end the same way for the driver.
+            if (message == null)
+              offlineReturnNotice
+            else
+              ReturnNotice(
+                body: message,
+                age: 'just now',
+                delay: const Duration(seconds: 1),
+              ),
           ], overlay);
         }),
       );
@@ -207,7 +232,10 @@ class _ReturnFlowScreenState extends State<ReturnFlowScreen> {
       return;
     }
 
-    final notices = _scenario.notices;
+    final scripted = _scenario.notices;
+    final notices = scripted.isEmpty && _offline
+        ? const [offlineReturnNotice]
+        : scripted;
     Navigator.of(context).popUntil((r) => r.isFirst);
     _deliver(notices, overlay);
   }

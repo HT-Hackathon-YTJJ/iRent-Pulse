@@ -22,6 +22,13 @@ const String _kAssetRoot = 'assets/images/return';
 /// Seven slots, not five: the board opens on the 加油卡/停車卡 shot, takes both
 /// cabin rows, and only then walks the four body corners. The order here *is*
 /// the order of the strip and of the flow, so nothing else has to restate it.
+///
+/// The four corners go 左前 → 右前 → 右後 → 左後, which is one lap of the car:
+/// across the nose, down the passenger side, across the tail. They used to go
+/// 右前 → 左前 → 右後 → 左後, and that is two laps — the driver crossed the
+/// front, came back, crossed to the rear-right, and crossed again. Four shots
+/// is few enough that the wasted walking is the whole difference between a
+/// return that feels like a circuit and one that feels like errands.
 enum CaptureSpot {
   fuelCard(
     label: '加油卡/停車卡',
@@ -47,27 +54,29 @@ enum CaptureSpot {
     guideAspect: 1.5000,
     isCorner: false,
   ),
-  frontRight(
-    label: '右前',
-    art: 'right_front',
-    guideAspect: 1.8966,
-    guideBleed: -0.16,
-  ),
   frontLeft(
     label: '左前',
     art: 'left_front',
     guideAspect: 1.8966,
     guideBleed: 0.16,
   ),
+  frontRight(
+    label: '右前',
+    art: 'right_front',
+    guideAspect: 1.8966,
+    guideBleed: -0.16,
+  ),
   rearRight(
     label: '右後',
     art: 'right_back',
     guideAspect: 1.8333,
+    guideBleed: 0.16,
   ),
   rearLeft(
     label: '左後',
     art: 'left_back',
     guideAspect: 1.8000,
+    guideBleed: -0.16,
   );
 
   const CaptureSpot({
@@ -115,11 +124,14 @@ enum CaptureSpot {
   /// the driver aligns against (front bumper line, A-pillar, wheel arch) are
   /// the ones that stay in it.
   ///
-  /// So the bleed is always on the side **away from the corner being shot**.
-  /// In the 右前 render the nose sits on the right of the frame, so the tail is
-  /// what runs off the left; 左前 is the mirror. The two rear shots keep the
-  /// whole shape: the tail is the subject there, and both rear corners want the
-  /// number plate in frame.
+  /// So the bleed is always on the side **away from the corner being shot**,
+  /// and it alternates down the strip because the walk does. In the 右前 render
+  /// the nose sits on the right of the frame, so the tail is what runs off the
+  /// left; 左前 is its mirror. The two rear shots follow the same rule one lap
+  /// later — 右後 bleeds off the right and keeps its left margin, 左後 the
+  /// mirror of that — which is what makes their outlines as large as the front
+  /// pair's instead of a shrunken whole car floating in the middle of the
+  /// frame.
   final double guideBleed;
 
   /// Strip indicator shown while the slot is still empty. 72×72, sized to the
@@ -381,6 +393,24 @@ class ReturnNotice {
   /// How long after the return the banner appears in the demo.
   final Duration delay;
 }
+
+/// The push that lands when the back office never answered.
+///
+/// A return whose L1/L2/L3 calls never reached anything still has to end the
+/// way every other return ends: the driver walked away expecting 「結果將以通知
+/// 告知」, and silence is the one outcome that reads as the app having dropped
+/// their return on the floor. So the offline path says the same thing the
+/// all-clear path says — the photos were readable, the cabin was clean, there
+/// is nothing to pay — and the tap opens the same 訂單明細.
+///
+/// This is a demo affordance, stated plainly: with no service behind it the
+/// app cannot know any of that. It is the right default anyway, because the
+/// alternative is accusing someone on the strength of a failed HTTP call.
+const offlineReturnNotice = ReturnNotice(
+  body: '本次還車分析已完成：照片皆可判讀、車內整潔，您無需負擔任何費用。感謝愛惜車輛✨',
+  age: '1h ago',
+  delay: Duration(seconds: 3),
+);
 
 // ---------------------------------------------------------------------------
 // Scenarios

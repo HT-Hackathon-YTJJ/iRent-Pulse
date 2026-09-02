@@ -1,8 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:latlong2/latlong.dart' show LatLng;
 
 import '../data/vehicle.dart';
 import '../design/tokens.dart';
 import '../services/trip_state.dart';
+import '../services/user_location.dart';
 import '../widgets/back_button.dart';
 import '../widgets/map_backdrop.dart';
 import '../widgets/map_chrome.dart';
@@ -57,6 +61,19 @@ class _HomeMapScreenState extends State<HomeMapScreen>
   RentMode _mode = RentMode.station;
   bool _car = true;
 
+  /// The device's own position, once it has one. Null until the OS answers —
+  /// or for ever, if the driver said no.
+  LatLng? _me;
+
+  /// The stations on the map. Starts as the scripted Taichung scatter and is
+  /// replaced by a field around [_me] the moment a fix lands, which is what
+  /// makes 立即預約 and the 定位 button mean anything.
+  StationField _field = StationField.demo;
+
+  /// Guards the 定位 button against a second request while one is in flight —
+  /// the platform can take several seconds over the first fix.
+  bool _locating = false;
+
   /// The pin whose cars are showing, or null while the home block is up.
   /// A pin tap stays on this screen — it must not push a route, or the map
   /// would rebuild underneath and the pins would jump.
@@ -74,6 +91,9 @@ class _HomeMapScreenState extends State<HomeMapScreen>
     if (trip != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _resume(trip));
     }
+    // The first-launch permission prompt. Asked here rather than in main() so
+    // the map the permission is *for* is already behind the system dialog.
+    unawaited(_locate(recentre: trip == null));
   }
 
   @override
@@ -90,7 +110,7 @@ class _HomeMapScreenState extends State<HomeMapScreen>
     if (_pin != null) _closePin();
     setState(() {
       _focus = MapFocus(
-        target: DemoPlace.taichung,
+        target: _me ?? DemoPlace.taichung,
         minZoom: _homeZoom,
         seq: ++_focusSeq,
       );
@@ -118,14 +138,63 @@ class _HomeMapScreenState extends State<HomeMapScreen>
     );
   }
 
-  /// 同站租還 shows a red map-pin glyph inside the white bubble, 路邊租還 a red
-  /// car — exactly like the production app. The selected pin inverts to a
-  /// solid brand bubble so the map shows which card the deck is on.
-  List<MapPin> get _pins => demoMapPins(
+  /// The selected pin inverts to a solid brand bubble so the map shows which
+  /// card the deck is on.
+  List<MapPin> get _pins => _field.mapPins(
     station: _mode == RentMode.station,
     selected: _pin,
     onTap: _selectPin,
   );
+
+  /// Read the device's position, scatter the stations around it, and — unless
+  /// something is already selected — take the camera there.
+  ///
+  /// Called once when the map opens and again on every tap of the 定位 button.
+  /// Failure is silent by design: the map keeps the scripted field and the
+  /// scripted centre, which is exactly what it showed before any of this
+  /// existed.
+  Future<void> _locate({bool recentre = true}) async {
+    if (_locating) return;
+    setState(() => _locating = true);
+    final at = await UserLocation.locate();
+    if (!mounted) return;
+    setState(() {
+      _locating = false;
+      if (at == null) return;
+      _me = at;
+      // Only when the field is genuinely somewhere else. Re-deriving it from a
+      // fix a few metres from the last one would rebuild an identical field
+      // and repaint eight markers for nothing.
+      if (_field.centre != at) _field = StationField.around(at);
+      if (recentre && _pin == null) {
+        _focus = MapFocus(target: at, minZoom: _homeZoom, seq: ++_focusSeq);
+      }
+    });
+  }
+
+  /// The 定位 button.
+  ///
+  /// Flies to the fix already in hand before asking for a fresh one: the tap
+  /// means "put me back on the map", and a first reading can take several
+  /// seconds — long enough that a button which does nothing until it lands
+  /// reads as a button that does not work.
+  void _goToMe() {
+    final at = _me;
+    if (at != null) {
+      setState(() {
+        _focus = MapFocus(target: at, minZoom: _focusZoom, seq: ++_focusSeq);
+      });
+    }
+    unawaited(_locate(recentre: at == null));
+  }
+
+  /// 立即預約 / 一鍵尋車 — open the nearest station, exactly as if its pin had
+  /// been tapped.
+  ///
+  /// Nearest to the driver when there is a fix, nearest to the middle of the
+  /// map when there is not: with no position to measure from, the centre of
+  /// what is on screen is the closest thing to "here" the app has.
+  void _bookNearest() => _selectPin(_field.nearestTo(_me ?? _field.centre));
 
   /// A pin does not open the booking sheet directly: it first shows the cars
   /// it stands for as a swipeable deck (同站租還 → the station's fleet,
@@ -141,7 +210,7 @@ class _HomeMapScreenState extends State<HomeMapScreen>
     setState(() {
       _pin = index;
       _focus = MapFocus(
-        target: demoPinLocation(index),
+        target: _field.at(index),
         minZoom: _focusZoom,
         // Re-tapping the pin you already have selected should still bring it
         // back to the middle after you have panned away.
@@ -212,9 +281,13 @@ class _HomeMapScreenState extends State<HomeMapScreen>
             children: [
               Positioned.fill(
                 child: MapBackdrop(
-                  center: DemoPlace.taichung,
+                  center: _me ?? DemoPlace.taichung,
                   zoom: _homeZoom,
                   pins: _pins,
+                  // No dot at all until the device has answered: a blue dot on
+                  // a coordinate nobody is standing on is worse than no dot.
+                  showUserDot: _me != null,
+                  userLocation: _me,
                   bottomPadding: showingPin
                       ? PinVehiclesSheet.collapsedHeight(bottomInset)
                       : 150 + bottomInset,
@@ -336,13 +409,15 @@ class _HomeMapScreenState extends State<HomeMapScreen>
                 ).push(MaterialPageRoute(builder: (_) => const TripScreen())),
               ),
               const SizedBox(width: 12),
-              Expanded(child: _PrimaryAction(mode: _mode)),
+              Expanded(child: _PrimaryAction(mode: _mode, onTap: _bookNearest)),
               const SizedBox(width: 12),
               MapCircleButton(
                 icon: Icons.my_location,
                 size: 46,
-                iconColor: AppColor.textPrimary,
-                onTap: () {},
+                iconColor: _me == null
+                    ? AppColor.textSecondary
+                    : AppColor.accentBlue,
+                onTap: _goToMe,
               ),
             ],
           ),
@@ -400,9 +475,10 @@ class _SquareButton extends StatelessWidget {
 }
 
 class _PrimaryAction extends StatelessWidget {
-  const _PrimaryAction({required this.mode});
+  const _PrimaryAction({required this.mode, required this.onTap});
 
   final RentMode mode;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -413,7 +489,7 @@ class _PrimaryAction extends StatelessWidget {
       elevation: 0,
       child: InkWell(
         borderRadius: BorderRadius.circular(AppRadius.pill),
-        onTap: () {},
+        onTap: onTap,
         child: SizedBox(
           height: 46,
           child: Row(

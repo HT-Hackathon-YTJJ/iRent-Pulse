@@ -55,6 +55,11 @@ dependencies:
   # 還車後的「已確認車內整潔」推播。Android 13+ 要 POST_NOTIFICATIONS，
   # iOS 要 UNUserNotificationCenter 授權，兩邊都由這個套件自己要。
   flutter_local_notifications: ^22.3.0
+  # 地圖的藍點、周邊站點的隨機生成、以及「立即預約」找最近站點，都要真的裝置座標。
+  # permission_handler 只能問權限，問不到位置；google_maps_flutter 的原生藍點也
+  # 不會把座標交回 Dart，所以另外裝這一個。lib/services/user_location.dart 是
+  # 唯一的呼叫點，拿不到定位時整個 App 照常運作。
+  geolocator: ^14.0.3
 
 dev_dependencies:
   flutter_test:
