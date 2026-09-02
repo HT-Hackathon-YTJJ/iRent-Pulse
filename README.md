@@ -1,6 +1,6 @@
 # iRent Pulse
 
-🔮 iRent 智能車況管家 — 和泰黑客松作品。以 Flutter 復刻 iRent App 主要頁面，並在其上實作四項改善功能。
+iRent 智能車況管家 — 和泰黑客松作品。以 Flutter 復刻 iRent App 主要頁面，並在其上實作四項改善功能。
 
 目前已完成：**主要頁面骨架** + **功能一「安心上路輔助」完整流程** + **功能四「還車拍照偵測」L0–L3 全鏈路**。
 
@@ -38,7 +38,7 @@ flutter run -d chrome
 ### 主要頁面（復刻 iRent）
 
 | 畫面 | 檔案 |
-|---|---|
+| --- | --- |
 | 地圖首頁（同站租還／路邊租還、站點 Pin、立即預約／一鍵尋車） | `lib/screens/home_map_screen.dart` |
 | 站點車輛卡片 deck（**查看更多**） | `lib/screens/pin_vehicles_sheet.dart` |
 | 側邊選單（會員、錢包、優惠、回饋計畫） | `lib/screens/side_menu.dart` |
@@ -72,7 +72,7 @@ flutter run -d chrome
 ```
 
 | 畫面 | 檔案 |
-|---|---|
+| --- | --- |
 | 偵測車款（掃描動畫） | `lib/screens/detecting_dialog.dart` |
 | 車輛規格表 | `lib/screens/vehicle_spec_sheet.dart` |
 | 如何啟動這輛車 | `lib/screens/start_vehicle_sheet.dart` |
@@ -206,7 +206,7 @@ CI 之類不方便放檔案的環境，仍可用 `--dart-define-from-file=.env` 
 `docs/return-car-docs/分層規格書_v1.md` 的四層，端上一層、伺服器三層：
 
 | 層 | 問題 | 位置 | 檔案 |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | **L0 拍攝防呆** | 這張照片拍好了嗎？ | 手機，每一幀 | `lib/l0/` |
 | **L1 快篩** | 能判讀嗎？看得到車損嗎？車內乾淨嗎？ | 伺服器，**阻塞** | `api/app/l1.py` |
 | **L2 影像確認** | 這個損傷是這趟造成的嗎？ | 伺服器，非同步 | `api/app/l2.py` |
@@ -219,7 +219,7 @@ CI 之類不方便放檔案的環境，仍可用 `--dart-define-from-file=.env` 
 `ReturnCaptureScreen` 開的是真的相機，每一幀都在算：
 
 | 檢查 | 方法 | 檔案 |
-|---|---|---|
+| --- | --- | --- |
 | 車體存在 | COCO SSD MobileNet v1（TFLite）的 `car`／`truck`／`bus` bbox | `l0/car_detector.dart` |
 | **距離**（`fill`） | bbox 與匡線的**面積開根號**比值 → 靠近一點／退後一步 | `l0/aim.dart` |
 | **偏移**（`drift`） | 兩者中心距離 ÷ 匡線對角線 → 對齊輪廓線 | `l0/aim.dart` |
@@ -337,7 +337,7 @@ api/.venv/bin/python -m pytest api/tests -q     # 伺服器（不需要起 serve
 ```
 
 | 檔案 | 釘住什麼 |
-|---|---|
+| --- | --- |
 | `test/l0_test.dart` | 清晰度／曝光／旋轉取樣、`fill`／`drift` 各自的語意、平滑與時效、遲滯、出血格不報「被切到」、門檻放寬 |
 | `test/capture_slots_test.dart` | 拍攝順序、每格的圖檔對到自己的角度、只有前兩格出血且互為鏡像、四層圖都在 bundle 裡、`guideAspect` 與圖檔相符 |
 | `test/trip_state_test.dart` | 租約狀態的存／取／清除，還車後不會復活 |
@@ -350,7 +350,7 @@ api/.venv/bin/python -m pytest api/tests -q     # 伺服器（不需要起 serve
 ### 權限
 
 | 平台 | 相機 | 定位 | 說明 |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | Android | `AndroidManifest.xml` | 同左 | 另有 `FLASHLIGHT`；`network_security_config.xml` 只對本機開發位址開明文 HTTP |
 | iOS | `NSCameraUsageDescription` | `NSLocationWhenInUseUsageDescription` | Podfile 只編 `PERMISSION_CAMERA` 與 `PERMISSION_LOCATION` 兩個處理程式 |
 
@@ -389,7 +389,7 @@ App 裡的留言板就是訂車頁的**租用履歷**（`VehicleProfile.reviews`
 那句話，就是半小時後 L2 拿來衡量的那句話。
 
 | 端點 | 用途 |
-|---|---|
+| --- | --- |
 | `POST /v1/cars/{car_no}/notes` | 寫一則留言（`created_at` 可帶，用來回填既有的板） |
 | `GET /v1/cars/{car_no}/notes?before=…` | 讀留言板；`before` 就是 L2 套用的時間切點 |
 
@@ -449,7 +449,7 @@ Figma `分支A・清潔確認通知`（831:5789）把它畫在鎖定畫面上，
 兩個平台都要，而且安裝不會給：
 
 | 平台 | 權限 | 在哪裡要 |
-|---|---|---|
+| --- | --- | --- |
 | Android 13+ | `POST_NOTIFICATIONS`（`AndroidManifest.xml`） | 分析頁之後，`ReturnNotifications.requestPermission()` |
 | iOS | `UNUserNotificationCenter` 授權 | 同上；另外 `AppDelegate` 要把自己設成 notification centre 的 delegate，否則 App 開著時 iOS 會直接吞掉通知 |
 
