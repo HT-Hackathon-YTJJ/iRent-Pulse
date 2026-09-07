@@ -375,22 +375,18 @@ class ReturnAnalysis {
 
 /// A push that lands after the driver has already walked away.
 ///
-/// The Figma boards show these on a lock screen; in the demo they arrive as an
-/// in-app banner once the flow returns to the map, because the point being
-/// demonstrated is the timing — nothing about damage is said at the counter.
+/// The Figma boards show these on a lock screen an hour after the return, and
+/// that is exactly where they land — the notification tray, nowhere else. The
+/// point being demonstrated is the timing: nothing about damage is said at the
+/// counter, because the layers that can say it honestly take minutes.
 class ReturnNotice {
-  const ReturnNotice({
-    required this.body,
-    required this.age,
-    required this.delay,
-  });
+  const ReturnNotice({required this.body, required this.delay});
 
   final String body;
 
-  /// Timestamp shown on the banner, straight from the mock ("1h ago").
-  final String age;
-
-  /// How long after the return the banner appears in the demo.
+  /// How long after the return the notification is posted. The boards' 「1h
+  /// ago」 is compressed to seconds so the demo can be watched; the tray writes
+  /// its own timestamp either way.
   final Duration delay;
 }
 
@@ -408,7 +404,6 @@ class ReturnNotice {
 /// alternative is accusing someone on the strength of a failed HTTP call.
 const offlineReturnNotice = ReturnNotice(
   body: '本次還車分析已完成：照片皆可判讀、車內整潔，您無需負擔任何費用。感謝愛惜車輛✨',
-  age: '1h ago',
   delay: Duration(seconds: 3),
 );
 
@@ -468,28 +463,24 @@ enum ReturnScenario {
     ReturnScenario.trash => const [
       ReturnNotice(
         body: '已確認車內整潔，您的信用分數維持不變，感謝配合✨',
-        age: '1h ago',
         delay: Duration(seconds: 3),
       ),
     ],
     ReturnScenario.minorDamage => const [
       ReturnNotice(
         body: '本次還車深度分析已完成，您無需負擔任何費用。感謝愛惜車輛，優良駕駛進度 +1',
-        age: '1h ago',
         delay: Duration(seconds: 3),
       ),
     ],
     ReturnScenario.severeDamage => const [
       ReturnNotice(
         body: '本次還車偵測到需進一步確認之車況，客服人員複核中，將於 24 小時內與您聯繫。',
-        age: '1h ago',
         delay: Duration(seconds: 3),
       ),
       ReturnNotice(
         body:
             '經人工複核，本次租用期間新增「後保險桿脫落」。求償金額 NT\$8,500。'
             '點此查看取車／還車比對照片 · 7 日內提出申訴',
-        age: '20m ago',
         delay: Duration(seconds: 9),
       ),
     ],

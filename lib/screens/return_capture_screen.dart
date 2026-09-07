@@ -27,9 +27,11 @@ import '../services/return_session.dart';
 ///
 /// Two rules this screen must never break:
 ///
-/// * **The shutter is never disabled.** An off-target frame raises the 判定未達標
-///   panel, which still offers 仍要送出. A driver who cannot get a passing photo
-///   abandons the return, and that costs more than a mediocre photo.
+/// * **The shutter is never disabled, and it always exposes.** An off-target
+///   frame is still taken; the screen freezes on it and raises the 判定未達標
+///   panel, which offers 重拍 or 仍要送出 — and 仍要送出 files the frame that was
+///   held, not a fresh one. A driver who cannot get a passing photo abandons
+///   the return, and that costs more than a mediocre photo.
 /// * **No camera is not a dead end.** On a desktop, on the web, or after a
 ///   denied permission the screen falls back to the scripted still and the
 ///   simulated verdict, so the flow can still be walked end to end.
@@ -145,10 +147,30 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
     startMisaligned: widget.startMisaligned,
   );
 
-  /// Non-null while the 判定未達標 panel is up.
+  /// True while the 判定未達標 panel is up and the screen is frozen on [_held].
   bool _reviewing = false;
 
-  /// Guards against the auto-shutter firing twice on consecutive good frames.
+  /// The photo taken when the shutter was pressed on a failing frame.
+  ///
+  /// 仍要送出 has to commit *this* — the frame the driver composed and chose —
+  /// and not whatever the lens happens to be pointing at once they have read
+  /// the panel and made up their mind. By then the phone is usually back at
+  /// their side, so re-exposing on 仍要送出 filed a photo of the tarmac under a
+  /// slot the driver believed held their bumper. The frame is taken on the
+  /// press, every time; the verdict only decides whether it is filed straight
+  /// away or held for a question.
+  ///
+  /// Null while reviewing means there was no camera to expose — the scripted
+  /// fallback, whose viewfinder is a still to begin with.
+  CapturedShot? _held;
+
+  /// The verdict as it read at the moment of the press, so the badge, the
+  /// silhouette and the panel's own hint stay on the held frame's result
+  /// instead of tracking a stream the driver can no longer see.
+  AimVerdict? _heldVerdict;
+
+  /// Guards the shutter against a second press while a frame is being exposed,
+  /// and against any press at all once the last slot is filled.
   bool _capturing = false;
 
   late final AnimationController _shutterFlash = AnimationController(
@@ -164,7 +186,7 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
   bool get _liveCamera => _camera.ready;
 
   AimVerdict get _verdict =>
-      _liveCamera ? _camera.verdict : _simulator.verdict;
+      _heldVerdict ?? (_liveCamera ? _camera.verdict : _simulator.verdict);
 
   @override
   void initState() {
@@ -204,39 +226,62 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
   /// and it takes away the one moment in the flow where they get to decide the
   /// photo is right. So the button is the only way a photo is taken.
   ///
-  /// **It only fires on green.** An amber or grey frame raises 判定未達標
-  /// instead, which still offers 仍要送出 — the shutter is gated, never locked.
-  /// A driver who cannot get to green in a dark car park has to be able to
-  /// finish the return; that costs one mediocre photo, and refusing costs the
-  /// whole return. If that escape hatch is ever removed, it is this comment
-  /// that has to change with it.
+  /// **The press always exposes a frame.** On green it goes straight into the
+  /// slot; on amber or grey the screen freezes on it and raises 判定未達標,
+  /// which still offers 仍要送出 — the shutter is gated, never locked. A driver
+  /// who cannot get to green in a dark car park has to be able to finish the
+  /// return; that costs one mediocre photo, and refusing costs the whole
+  /// return. If that escape hatch is ever removed, it is this comment that has
+  /// to change with it.
+  ///
+  /// Exposing on the press rather than on the answer matters more than it
+  /// sounds. L0 can be wrong — a car perfectly inside the outline still reads
+  /// 未對準 when the detector misses it in low light or against a dark wall —
+  /// and that is precisely the case where the driver reaches for 仍要送出. If
+  /// the photo were taken then, the frame they spent a minute lining up would
+  /// be thrown away and replaced by whatever the phone saw as it came down.
   void _onShutter() {
     if (_reviewing || _capturing) return;
-    if (_verdict.isAcceptable) {
-      unawaited(_capture(manual: true));
-    } else {
-      setState(() => _reviewing = true);
-    }
+    unawaited(_shutter());
   }
 
-  /// [manual] is true when the driver overrode a failing check. It rides along
-  /// on the photo as `capture_mode: manual` / `bypassed`, and L1 tightens its
-  /// readability check on the strength of it.
-  Future<void> _capture({required bool manual}) async {
-    if (_capturing) return;
-    _capturing = true;
-    final spot = _current;
+  /// Expose the frame, then decide what to do with it.
+  Future<void> _shutter() async {
+    final verdict = _verdict;
+    setState(() => _capturing = true);
 
+    // `manual: true` rides along on the photo as `capture_mode: manual` /
+    // `bypassed`; L1 tightens its readability check on the strength of it. The
+    // shutter is the only way a photo is taken here, so it is always set.
     CapturedShot? shot;
-    if (_liveCamera) shot = await _camera.capture(manual: manual);
-    if (!mounted) {
-      _capturing = false;
+    if (_liveCamera) shot = await _camera.capture(manual: true);
+    if (!mounted) return;
+
+    _shutterFlash.forward(from: 0);
+    _capturing = false;
+
+    if (verdict.isAcceptable) {
+      _commit(shot);
       return;
     }
 
-    _shutterFlash.forward(from: 0);
+    // Held, not filed. The frame stays on screen under the panel so 重拍 and
+    // 仍要送出 are answered about a photo the driver can actually see.
+    setState(() {
+      _reviewing = true;
+      _held = shot;
+      _heldVerdict = verdict;
+    });
+  }
+
+  /// File [shot] against the current slot and open the next one.
+  void _commit(CapturedShot? shot) {
+    final spot = _current;
+
     setState(() {
       _reviewing = false;
+      _held = null;
+      _heldVerdict = null;
       _pending.remove(spot);
       _taken.add(spot);
       if (shot != null) _frames[spot] = shot.file;
@@ -251,7 +296,9 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
     }
 
     if (_pending.isEmpty) {
-      // Let the shutter flash land before the page changes under it.
+      // Nothing left to shoot, so the shutter stays shut while the page
+      // changes under it. Let the flash land first.
+      _capturing = true;
       Future<void>.delayed(const Duration(milliseconds: 260), () {
         if (mounted) widget.onFinished();
       });
@@ -261,12 +308,26 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
     setState(() => _current = _firstPending);
     _camera.restartAim();
     _simulator.restart();
-    _capturing = false;
   }
 
   void _retake() {
-    setState(() => _reviewing = false);
-    _camera.restartAim();
+    final rejected = _held;
+    setState(() {
+      _reviewing = false;
+      _held = null;
+      _heldVerdict = null;
+    });
+    if (rejected != null) {
+      // A temp file nothing will ever read again — the slot it was taken for
+      // is still pending and the next press writes a new one.
+      unawaited(
+        rejected.file.delete().catchError((Object _) => rejected.file),
+      );
+    }
+    // Same slot, same attempt: the relaxation clock keeps running, so a
+    // driver who has been fighting an unconvinced detector for ten seconds
+    // does not get handed back the strict thresholds for pressing 重拍.
+    _camera.restartAim(keepElapsed: true);
     _simulator.restart();
   }
 
@@ -364,6 +425,7 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
     final safeTop = media.padding.top;
     final verdict = _verdict;
     final spot = _current;
+    final held = _held;
 
     final preview = _previewRect(media.size, safeTop);
 
@@ -386,6 +448,20 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
                 ? _Preview(controller: _camera.controller!)
                 : Image.asset(spot.viewfinderAsset, fit: BoxFit.cover),
           ),
+
+          // The held frame, laid over the still-running preview. 判定未達標 is a
+          // question about a specific photo, so that photo is what the driver
+          // reads it against — and freezing here rather than pausing the stream
+          // keeps the camera warm for the retake that usually follows.
+          if (held != null)
+            Positioned.fromRect(
+              rect: preview,
+              child: Image.file(
+                held.file,
+                fit: BoxFit.cover,
+                gaplessPlayback: true,
+              ),
+            ),
 
           // The alignment guide. It stays up in every state and changes colour
           // instead of disappearing — 灰 → 黃 → 綠 is the readout the driver is
@@ -429,16 +505,20 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
           // floats it over the frame, which worked when the frame was
           // full-bleed; with the preview drawn whole it landed on top of the
           // guide and shoulder-to-shoulder with the hint pill.
-          Positioned(
-            right: 24,
-            bottom: 90,
-            child: _ZoomCluster(
-              zoom: _liveCamera ? _camera.zoom : 1,
-              minZoom: _liveCamera ? _camera.minZoom : 1,
-              maxZoom: _liveCamera ? _camera.maxZoom : 1,
-              onChanged: (z) => unawaited(_camera.setZoom(z)),
+          // Zoom and torch act on a stream the driver is no longer looking
+          // at while the frame is held, so they stand down until 重拍 puts the
+          // live feed back.
+          if (!_reviewing)
+            Positioned(
+              right: 24,
+              bottom: 90,
+              child: _ZoomCluster(
+                zoom: _liveCamera ? _camera.zoom : 1,
+                minZoom: _liveCamera ? _camera.minZoom : 1,
+                maxZoom: _liveCamera ? _camera.maxZoom : 1,
+                onChanged: (z) => unawaited(_camera.setZoom(z)),
+              ),
             ),
-          ),
 
           if (_camera.failure != CaptureFailure.none)
             Positioned(
@@ -463,7 +543,7 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
               child: Center(
                 child: _BelowStandardPanel(
                   hint: verdict.hint,
-                  onSubmitAnyway: () => unawaited(_capture(manual: true)),
+                  onSubmitAnyway: () => _commit(held),
                   onRetake: _retake,
                 ),
               ),
@@ -482,23 +562,35 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
             ),
           ),
 
-          Positioned(
-            left: 54,
-            bottom: 90,
-            child: _FlashButton(
-              on: _camera.torchOn,
-              onTap: () => unawaited(_camera.toggleTorch()),
+          if (!_reviewing)
+            Positioned(
+              left: 54,
+              bottom: 90,
+              child: _FlashButton(
+                on: _camera.torchOn,
+                onTap: () => unawaited(_camera.toggleTorch()),
+              ),
             ),
-          ),
 
           Positioned(
             left: 0,
             right: 0,
             bottom: 71.5,
             child: Center(
-              child: _ShutterButton(
-                armed: verdict.isAcceptable,
-                onTap: _onShutter,
+              // Kept in place rather than removed while the frame is held, so
+              // the bottom of the screen does not rearrange itself under a
+              // driver who is reading the panel — but faded and inert, because
+              // the answer is now one of the panel's two buttons.
+              child: IgnorePointer(
+                ignoring: _reviewing,
+                child: AnimatedOpacity(
+                  duration: const Duration(milliseconds: 160),
+                  opacity: _reviewing ? 0.35 : 1,
+                  child: _ShutterButton(
+                    armed: verdict.isAcceptable,
+                    onTap: _onShutter,
+                  ),
+                ),
               ),
             ),
           ),
@@ -1095,8 +1187,9 @@ class _BelowStandardPanel extends StatelessWidget {
   final VoidCallback onSubmitAnyway;
   final VoidCallback onRetake;
 
-  /// Whatever L0 is actually unhappy about, so the panel says something useful
-  /// instead of only "未達標".
+  /// Whatever L0 was unhappy about at the moment of the press, so the panel
+  /// says something useful instead of only "未達標" — and says it about the
+  /// photo frozen behind it rather than about the live frame.
   final String? hint;
 
   @override
@@ -1104,8 +1197,8 @@ class _BelowStandardPanel extends StatelessWidget {
     return _GlassPanel(
       title: '判定未達標',
       body: hint == null
-          ? '照片已保留，仍可送出（不阻擋還車）。完成拍攝可獲得本次駕駛獎勵金。'
-          : '$hint。照片已保留，仍可送出（不阻擋還車）。',
+          ? '畫面為剛拍下的照片，仍可直接送出（不阻擋還車）。完成拍攝可獲得本次駕駛獎勵金。'
+          : '$hint。畫面為剛拍下的照片，仍可直接送出（不阻擋還車）。',
       actions: [
         _PanelAction(label: '仍要送出', onTap: onSubmitAnyway, filled: false),
         _PanelAction(label: '重拍這張', onTap: onRetake, filled: true),

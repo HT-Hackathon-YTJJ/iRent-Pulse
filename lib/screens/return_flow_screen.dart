@@ -9,8 +9,6 @@ import '../design/tokens.dart';
 import '../services/notifications.dart';
 import '../services/return_session.dart';
 import '../services/trip_state.dart';
-import '../widgets/return_notice_banner.dart';
-import 'order_detail_screen.dart';
 import 'return_analysis_screen.dart';
 import 'return_capture_screen.dart';
 import 'return_done_screen.dart';
@@ -176,8 +174,9 @@ class _ReturnFlowScreenState extends State<ReturnFlowScreen> {
   void _afterAnalysis() {
     // Asked here, not at launch and not next to the camera prompt: the page the
     // driver is about to see says 「結果將以通知告知，您可立即離開」, so the reason for
-    // the permission is on screen while the system dialog is up. A refusal is
-    // not a dead end — ReturnNoticeBanner shows the same copy in-app.
+    // the permission is on screen while the system dialog is up. A refusal
+    // costs the driver the verdict — the return itself still completes, and
+    // 訂單明細 carries the same copy whenever they go looking for it.
     unawaited(ReturnNotifications.instance.requestPermission());
     setState(() {
       _step = _analysis.issue == null ? _Step.release : _Step.issue;
@@ -203,9 +202,6 @@ class _ReturnFlowScreenState extends State<ReturnFlowScreen> {
   /// In live mode this is where L2 and L3 run. The driver is already walking
   /// away, which is the entire reason those layers are not part of the wait.
   void _goHome() {
-    // Resolved before the pop: this route is what is being torn down.
-    final overlay = Overlay.of(context, rootOverlay: true);
-
     // The car is back. Nothing about this rental should survive a restart —
     // and popping to the map would otherwise leave 車輛資訊 restorable.
     unawaited(TripStore.end());
@@ -222,10 +218,9 @@ class _ReturnFlowScreenState extends State<ReturnFlowScreen> {
             else
               ReturnNotice(
                 body: message,
-                age: 'just now',
                 delay: const Duration(seconds: 1),
               ),
-          ], overlay);
+          ]);
         }),
       );
       Navigator.of(context).popUntil((r) => r.isFirst);
@@ -237,18 +232,19 @@ class _ReturnFlowScreenState extends State<ReturnFlowScreen> {
         ? const [offlineReturnNotice]
         : scripted;
     Navigator.of(context).popUntil((r) => r.isFirst);
-    _deliver(notices, overlay);
+    _deliver(notices);
   }
 
-  /// Send each verdict twice over: once as a real OS notification, once as the
-  /// in-app banner the boards draw.
+  /// Send each verdict as a real OS notification, and only as that.
   ///
-  /// Not a fallback chain — both, deliberately. The OS notification is the real
-  /// product behaviour and the one that still arrives when the app is closed;
-  /// the banner is what a projector, a muted simulator, the web build or a
-  /// declined permission can still show. Whichever the driver taps opens the
-  /// same 訂單明細 page.
-  void _deliver(List<ReturnNotice> notices, OverlayState overlay) {
+  /// There used to be an in-app banner alongside it, drawn the way the Figma
+  /// boards show the push — on a lock screen, iOS-styled. Rendering that
+  /// *inside* the app put an iOS notification on top of an Android phone, so
+  /// the one surface that was meant to read as the system reading it out loud
+  /// read instead as a bug. The tray is the real product behaviour, it is the
+  /// one that still arrives when the app is closed, and it looks like whatever
+  /// the driver's own phone looks like — so it is the only one left.
+  void _deliver(List<ReturnNotice> notices) {
     if (notices.isEmpty) return;
     for (final notice in notices) {
       unawaited(
@@ -259,13 +255,6 @@ class _ReturnFlowScreenState extends State<ReturnFlowScreen> {
         ),
       );
     }
-    ReturnNoticeBanner.schedule(overlay, notices, onTap: _openOrder);
-  }
-
-  void _openOrder() {
-    ReturnNotifications.navigatorKey.currentState?.push(
-      OrderDetailScreen.route(),
-    );
   }
 
   @override

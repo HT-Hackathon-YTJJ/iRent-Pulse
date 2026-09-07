@@ -236,8 +236,16 @@ class AimEvaluator {
   static const Duration relaxAfter = Duration(seconds: 8);
   static const Duration manualAfter = Duration(seconds: 24);
 
-  void restart() {
-    _openedAt = DateTime.now();
+  /// Drop the streak and the smoothed box, ready for a fresh attempt.
+  ///
+  /// [keepElapsed] leaves the relaxation clock where it is. A retake of the
+  /// slot the driver is already on is the same attempt continued, not a new
+  /// one: restarting the clock there put them back on the strict thresholds
+  /// every time they pressed 重拍, so the widening at [relaxAfter] could never
+  /// arrive for exactly the driver it exists for — the one who keeps trying
+  /// and keeps being told 未對準.
+  void restart({bool keepElapsed = false}) {
+    if (!keepElapsed || _openedAt == null) _openedAt = DateTime.now();
     _streak = 0;
     _smoothed = null;
   }

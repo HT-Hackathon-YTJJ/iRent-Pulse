@@ -29,7 +29,15 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 ///
 /// Neither is asked for at launch. The flow asks when it enters 還車拍照, where
 /// the prompt has an obvious reason attached — and if it is refused the return
-/// still completes, because [ReturnNoticeBanner] shows the same copy in-app.
+/// still completes; the driver simply does not get told, the same as any other
+/// app they have muted.
+///
+/// This is the *only* surface the verdict gets. There used to be an in-app
+/// banner drawn to match the Figma lock-screen boards, posted alongside every
+/// notification so a muted simulator or a declined permission still showed
+/// something. Drawing an iOS-styled notification inside the app on an Android
+/// phone made the one moment that should read as the system speaking read as a
+/// bug instead, so the tray is all that is left.
 class ReturnNotifications {
   ReturnNotifications._();
 
@@ -61,7 +69,8 @@ class ReturnNotifications {
   bool? get granted => _granted;
 
   /// Whether this build can post OS notifications at all. The web and desktop
-  /// demos fall back to the in-app banner.
+  /// demos have no tray to post to, so the verdict simply does not arrive
+  /// there — 訂單明細 still carries it.
   bool get supported =>
       !kIsWeb && (defaultTargetPlatform == TargetPlatform.android ||
           defaultTargetPlatform == TargetPlatform.iOS);
@@ -101,14 +110,15 @@ class ReturnNotifications {
           );
       _ready = true;
     } catch (error) {
-      debugPrint('通知初始化失敗，改用 App 內橫幅 — $error');
+      debugPrint('通知初始化失敗，本次還車不會有通知 — $error');
     }
   }
 
   /// Ask once, at a moment where the reason is on screen.
   ///
-  /// Returns false on a platform that cannot post them, which the caller reads
-  /// as "show the in-app banner instead" rather than as an error.
+  /// Returns false on a platform that cannot post them rather than throwing —
+  /// the caller has nothing to fall back to, but nothing to recover from
+  /// either.
   Future<bool> requestPermission() async {
     if (!supported) return false;
     await init();
@@ -148,7 +158,7 @@ class ReturnNotifications {
   /// app being killed, that is the moment to switch — and the moment to add
   /// `SCHEDULE_EXACT_ALARM` to the manifest.
   ///
-  /// Returns false when nothing was posted, so the caller can fall back.
+  /// Returns false when nothing was posted.
   Future<bool> notify({
     required String body,
     required Duration delay,

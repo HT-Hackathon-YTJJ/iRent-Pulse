@@ -225,10 +225,15 @@ class CaptureSession extends ChangeNotifier {
     _requireGuide = requireGuide;
   }
 
-  /// Called between slots: the clock that widens the thresholds restarts, so
-  /// the driver gets the full strict window for every shot.
-  void restartAim() {
-    _evaluator.restart();
+  /// Called between slots, and again after a 重拍.
+  ///
+  /// The streak and the smoothed box always go; [keepElapsed] decides whether
+  /// the clock that widens the thresholds goes with them. A new slot is a new
+  /// shot and gets the full strict window; a retake of the slot the driver is
+  /// already standing at is the same shot continued, and restarting its clock
+  /// would undo the widening they have been waiting on.
+  void restartAim({bool keepElapsed = false}) {
+    _evaluator.restart(keepElapsed: keepElapsed);
     verdict = const AimVerdict(state: AimState.off, hint: '對齊輪廓線');
     notifyListeners();
   }
