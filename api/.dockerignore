@@ -1,0 +1,11 @@
+.venv/
+data/
+tests/
+scripts/
+deploy/
+__pycache__/
+*.pyc
+.env
+README.md
+run.sh
+requirements-dev.txt

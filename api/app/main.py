@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 
 from . import (
@@ -46,6 +46,14 @@ app.add_middleware(
 )
 
 INTERIOR_SLOTS = {"車內", "後座", "前座", "駕駛座", "副駕"}
+
+
+@app.get("/", include_in_schema=False)
+async def root() -> RedirectResponse:
+    """The Hugging Face Space renders the service in an iframe pointed at `/`.
+    Without this it is a 404, which reads as a broken deploy rather than a
+    service whose whole surface is under /v1."""
+    return RedirectResponse("/docs")
 
 
 @app.get("/healthz")

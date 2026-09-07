@@ -1,0 +1,27 @@
+# iRent Pulse 車況檢測 API — Fly.io 部署設定。
+#
+# 部署：tool/deploy_fly.sh
+#
+# 機器閒置就停機（auto_stop_machines），第一個請求再喚醒——Fly 的喚醒是 VM
+# resume，約一到兩秒，跟 Render 免費方案動輒 50 秒的冷啟不是同一件事。代價是
+# App 探測 /healthz 的 timeout 要留得夠寬，見 InspectionApi.reachable。
+app = 'irent-pulse-api'
+primary_region = 'nrt'
+
+[build]
+
+[env]
+  # 容器裡只有 /tmp 保證可寫，而且 demo 不需要永久保存照片。
+  PHOTO_DIR = '/tmp/irent-photos'
+
+[http_service]
+  internal_port = 7860
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ['app']
+
+[[vm]]
+  size = 'shared-cpu-1x'
+  memory = '512mb'

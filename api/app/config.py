@@ -60,5 +60,7 @@ MAX_ATTEMPTS = int(env("VLM_MAX_ATTEMPTS", "3"))
 MAX_IMAGE_EDGE = int(env("MAX_IMAGE_EDGE", "1024"))
 JPEG_QUALITY = int(env("JPEG_QUALITY", "85"))
 
-PHOTO_DIR = API_DIR / "data" / "photos"
+# Overridable because a deployed container's code directory is not necessarily
+# writable — the Hugging Face Space runs as uid 1000 and only /tmp is a given.
+PHOTO_DIR = Path(env("PHOTO_DIR", str(API_DIR / "data" / "photos")))
 PHOTO_DIR.mkdir(parents=True, exist_ok=True)

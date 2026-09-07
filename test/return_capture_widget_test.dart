@@ -77,6 +77,74 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
   });
 
+  /// The empty-slot indicator for [spot]. Once a slot holds a photo the tile
+  /// shows the photo instead, so this finder disappearing *is* the "已拍攝"
+  /// state.
+  Finder slotIcon(CaptureSpot spot) => find.byWidgetPredicate(
+    (widget) =>
+        widget is Image &&
+        widget.image is AssetImage &&
+        (widget.image as AssetImage).assetName == spot.slotIcon,
+  );
+
+  testWidgets('a slot tile can be tapped to switch to it', (tester) async {
+    await open(tester, onFinished: () {});
+    expect(find.text('加油卡/停車卡'), findsOneWidget);
+
+    // 後座 is two tiles along, so it is on screen without scrolling the rail.
+    await tester.tap(
+      find
+          .ancestor(
+            of: slotIcon(CaptureSpot.interiorRear),
+            matching: find.byType(GestureDetector),
+          )
+          .first,
+    );
+    await tester.pump(const Duration(milliseconds: 400));
+
+    expect(find.text('車內裝(後座)'), findsOneWidget);
+    expect(find.text('加油卡/停車卡'), findsNothing);
+  });
+
+  testWidgets('a shot marks its slot and advances to the next empty one', (
+    tester,
+  ) async {
+    await open(tester, onFinished: () {});
+
+    await tester.tap(
+      find
+          .ancestor(
+            of: slotIcon(CaptureSpot.interiorRear),
+            matching: find.byType(GestureDetector),
+          )
+          .first,
+    );
+    await tester.pump(const Duration(milliseconds: 400));
+
+    await tester.pump(const Duration(seconds: 4));
+    expect(find.text('已對準'), findsOneWidget);
+    await tester.tap(find.byType(GestureDetector).last);
+    await tester.pump(const Duration(milliseconds: 400));
+
+    // 已拍攝: the indicator is gone, replaced by the frame.
+    expect(slotIcon(CaptureSpot.interiorRear), findsNothing);
+    // Advanced forward from 後座 to 左前 rather than back to the untouched
+    // 加油卡 at the head of the strip.
+    expect(find.text('車身拍照'), findsOneWidget);
+
+    // And it is still reachable: tapping a filled tile is how a retake starts.
+    await tester.tap(
+      find
+          .ancestor(
+            of: slotIcon(CaptureSpot.fuelCard),
+            matching: find.byType(GestureDetector),
+          )
+          .first,
+    );
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('加油卡/停車卡'), findsOneWidget);
+  });
+
   testWidgets('an off-target shutter offers 仍要送出 rather than blocking', (
     tester,
   ) async {

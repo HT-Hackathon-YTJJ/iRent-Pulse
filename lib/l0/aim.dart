@@ -4,6 +4,7 @@ import 'dart:ui' show Offset, Rect;
 import '../data/return_inspection.dart';
 import 'car_detector.dart';
 import 'frame_analysis.dart';
+import 'plate.dart';
 
 /// Everything L0 concluded about the frame that is on screen right now.
 ///
@@ -26,6 +27,8 @@ class AimVerdict {
     this.relaxed = false,
     this.manualOffered = false,
     this.detectorAvailable = true,
+    this.plate = PlateMatch.unknown,
+    this.plateSeen,
   });
 
   final AimState state;
@@ -68,6 +71,24 @@ class AimVerdict {
 
   final bool detectorAvailable;
 
+  /// What the plate reader currently believes about the car in frame.
+  final PlateMatch plate;
+
+  /// The plate that was read but does not belong to this rental, for the copy
+  /// that names it. Null unless [plate] is [PlateMatch.mismatch].
+  final String? plateSeen;
+
+  /// **A plate mismatch is not acceptable, and still does not lock the shutter.**
+  ///
+  /// [AimState.wrongCar] is simply not [AimState.locked], so it flows into the
+  /// same place every other failing state does: the press exposes a frame, the
+  /// screen freezes on it, and 判定未達標 offers 重拍 or 仍要送出. That is
+  /// deliberate. The reader can be wrong — a neighbouring car's plate is often
+  /// more legible than the driver's own, and a plate caked in road salt reads as
+  /// anything at all — and being told "this is not your car" about the car you
+  /// are standing at is exactly the moment somebody needs an override. L1 sees
+  /// the plate verdict in the `l0` block either way, so a genuinely wrong car
+  /// still comes back rejected from the layer that can afford to be sure.
   bool get isAcceptable => state == AimState.locked;
 
   /// The `l0` block attached to the photo (spec §L0 輸出).
@@ -87,6 +108,7 @@ class AimVerdict {
     'bypassed': manual && !isAcceptable,
     'relaxed': relaxed,
     'detector': detectorAvailable ? 'coco_ssd_mobilenet_v1' : 'none',
+    'plate': {'match': plate.name, if (plateSeen != null) 'seen': plateSeen},
   };
 }
 
@@ -286,6 +308,8 @@ class AimEvaluator {
     required Detection? car,
     required bool detectorAvailable,
     required bool requireGuide,
+    PlateMatch plate = PlateMatch.unknown,
+    String? plateSeen,
     DateTime? now,
   }) {
     final at = now ?? DateTime.now();
@@ -319,6 +343,8 @@ class AimEvaluator {
       relaxed: relaxed,
       manualOffered: manualOffered,
       detectorAvailable: detectorAvailable,
+      plate: plate,
+      plateSeen: plateSeen,
     );
 
     AimVerdict fail(AimState state, String hint) {
@@ -326,7 +352,24 @@ class AimEvaluator {
       return verdict(state, hint, 0);
     }
 
-    // Sharpness and exposure come first: they are true of the whole frame and
+    // Identity comes before everything, sharpness and exposure included.
+    //
+    // Every other check asks the driver to change something about the shot —
+    // hold steadier, step back, find better light. This one says the shot is of
+    // the wrong car, and none of those fix it. On the bench in a dim room the
+    // exposure check was answering first, so a driver standing at somebody
+    // else's car was being told 「光線不足」 and sent looking for a light.
+    //
+    // Only the corner slots reach here — the cabin rows and the sun visor have
+    // no plate in shot, and [PlateWatcher] holds a confirmed match across them.
+    // A frame too dark to read is not a mismatch either: the recogniser returns
+    // nothing, the watcher stays [PlateMatch.unknown], and the exposure hint
+    // below gets its turn as before.
+    if (requireGuide && plate == PlateMatch.mismatch) {
+      return fail(AimState.wrongCar, AimState.wrongCar.hint!);
+    }
+
+    // Sharpness and exposure come next: they are true of the whole frame and
     // no amount of repositioning fixes them.
     if (stats.blurScore < t.blurFloor) {
       return fail(AimState.near, '請保持穩定，畫面有點模糊');

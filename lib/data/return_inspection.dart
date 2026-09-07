@@ -197,6 +197,23 @@ enum AimState {
     AppColor.aimLocked,
     AppColor.aimLocked,
     null,
+  ),
+
+  /// 車輛不符 — a plate was read, repeatedly and clearly, and it is not the car
+  /// on the rental agreement. Red.
+  ///
+  /// Its own state rather than a flavour of [off] because it is the one verdict
+  /// the driver cannot answer by moving the phone. Every other state means
+  /// "adjust the shot"; this one means "you are standing at the wrong car", and
+  /// a grey 未對準 badge would send them shuffling back and forth in front of
+  /// somebody else's bumper. It still does not lock the shutter — see
+  /// [AimVerdict.isAcceptable].
+  wrongCar(
+    '車輛不符',
+    AppColor.aimWrongCar,
+    AppColor.aimWrongCar,
+    AppColor.aimWrongCar,
+    '這不是你租的車',
   );
 
   const AimState(

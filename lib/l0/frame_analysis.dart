@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 import 'dart:typed_data';
+import 'dart:ui' show Rect;
 
 import 'package:camera/camera.dart';
 
@@ -254,6 +255,67 @@ Uint8List sampleRotatedRgb(FramePixels px, int rotationDegrees, int size) {
       out[i++] = (packed >> 16) & 0xFF;
       out[i++] = (packed >> 8) & 0xFF;
       out[i++] = packed & 0xFF;
+    }
+  }
+  return out;
+}
+
+/// Sample an upright sub-rectangle of the frame as 8-bit luma.
+///
+/// [region] is in upright normalised coordinates (the same space the detector
+/// reports boxes in), and the result is [outW] × [outH] rows of luma with no
+/// padding. Luma rather than RGB because both byte layouts the plate reader has
+/// to build start with a luma plane, and a plate is dark characters on a light
+/// field — colour would double the marshalling and add nothing to read.
+///
+/// Cropping rather than downscaling the whole frame is the whole point. A plate
+/// is a few dozen pixels tall in a 1080p frame; squeeze that frame to something
+/// an OCR call can afford and the characters are gone before the recogniser
+/// ever sees them. Cropping to the car spends the same budget on the part of
+/// the image that has the answer in it.
+Uint8List sampleRotatedLuma(
+  FramePixels px,
+  int rotationDegrees,
+  Rect region,
+  int outW,
+  int outH,
+) {
+  final out = Uint8List(outW * outH);
+  final rotated = rotationDegrees == 90 || rotationDegrees == 270;
+  final srcW = rotated ? px.height : px.width;
+  final srcH = rotated ? px.width : px.height;
+
+  final left = (region.left * srcW).floor();
+  final top = (region.top * srcH).floor();
+  final spanW = math.max(1, (region.width * srcW).round());
+  final spanH = math.max(1, (region.height * srcH).round());
+
+  var i = 0;
+  for (var dy = 0; dy < outH; dy++) {
+    final uy = top + (dy * spanH) ~/ outH;
+    for (var dx = 0; dx < outW; dx++) {
+      final ux = left + (dx * spanW) ~/ outW;
+      // Same inverse rotation as sampleRotatedRgb: (ux, uy) walks the upright
+      // image, (sx, sy) walks the sensor's own layout.
+      final int sx, sy;
+      switch (rotationDegrees) {
+        case 90:
+          sx = uy;
+          sy = px.height - 1 - ux;
+        case 180:
+          sx = px.width - 1 - ux;
+          sy = px.height - 1 - uy;
+        case 270:
+          sx = px.width - 1 - uy;
+          sy = ux;
+        default:
+          sx = ux;
+          sy = uy;
+      }
+      out[i++] = px.luma(
+        sx.clamp(0, px.width - 1),
+        sy.clamp(0, px.height - 1),
+      );
     }
   }
   return out;

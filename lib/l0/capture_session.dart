@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io' show File, Platform;
+import 'dart:math' as math;
 import 'dart:ui' show Rect;
 
 import 'package:camera/camera.dart';
@@ -10,6 +11,7 @@ import 'aim.dart';
 import 'car_detector.dart';
 import 'frame_analysis.dart';
 import 'permissions.dart';
+import 'plate_reader.dart';
 
 /// One captured frame plus what L0 measured at the moment of the shutter.
 class CapturedShot {
@@ -37,13 +39,22 @@ enum CaptureFailure { none, permission, noCamera, error }
 /// presentational: it renders [verdict] and calls [capture]. Nothing else in
 /// the app needs to know that there is a neural net in the loop.
 class CaptureSession extends ChangeNotifier {
-  CaptureSession({AimThresholds thresholds = const AimThresholds()})
-    : _evaluator = AimEvaluator(base: thresholds);
+  CaptureSession({
+    AimThresholds thresholds = const AimThresholds(),
+    this.expectedPlate = '',
+  }) : _evaluator = AimEvaluator(base: thresholds),
+       _plates = PlateWatcher(expected: expectedPlate);
+
+  /// The plate on the rental agreement. Empty switches the 車牌比對 off, which
+  /// is what a scripted demo run or a widget test wants.
+  final String expectedPlate;
 
   final AimEvaluator _evaluator;
+  final PlateWatcher _plates;
 
   CameraController? _controller;
   CarDetector? _detector;
+  PlateReader? _plateReader;
 
   CameraController? get controller => _controller;
   bool get ready =>
@@ -68,6 +79,7 @@ class CaptureSession extends ChangeNotifier {
   bool _analysing = false;
   bool _requireGuide = true;
   DateTime _lastDetection = DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime _lastPlateRead = DateTime.fromMillisecondsSinceEpoch(0);
   int _darkFrames = 0;
   int _brightFrames = 0;
 
@@ -102,12 +114,60 @@ class CaptureSession extends ChangeNotifier {
   /// does not move between two consecutive frames.
   static const Duration _detectInterval = Duration(milliseconds: 200);
 
+  /// Read the plate about 1.5 times a second.
+  ///
+  /// Much slower than the detector on purpose. Recognition is a method-channel
+  /// round trip with a megabyte of pixels on it, and the answer it produces is
+  /// not per-frame information: a plate does not change, and [PlateWatcher]
+  /// wants three agreeing readings before it says anything anyway. 650 ms gets
+  /// to an answer in about two seconds — while the driver is still lining the
+  /// shot up — without competing with the detector for the CPU.
+  static const Duration _plateInterval = Duration(milliseconds: 650);
+
+  /// Grow the car's box before cropping to it. The detector draws to the metal
+  /// and a plate sits right at the bumper's edge, often a few pixels outside.
+  static const double _plateCropPadding = 0.06;
+
+  /// `--dart-define=L0_LOG_PLATES=true` prints every OCR result to the log.
+  ///
+  /// Off by default for two reasons. The plate check is the one part of L0 that
+  /// **cannot** be debugged anywhere but on a handset — the recogniser is a
+  /// method channel — so there has to be a way to see what it read; and a plate
+  /// is identifying, so that way must not be on in a build anybody ships.
+  static const bool _logPlates = bool.fromEnvironment('L0_LOG_PLATES');
+
   /// Consecutive dark/bright frames before the torch changes state. Without the
   /// hysteresis it strobes while someone walks around a car at dusk.
   static const int _torchOnAfter = 8;
   static const int _torchOffAfter = 24;
   static const double _darkLuma = 55;
   static const double _brightLuma = 95;
+
+  /// Serialises camera ownership across [CaptureSession] instances.
+  ///
+  /// `State.dispose()` cannot await, so a screen that remounts — a retake, or
+  /// the flow switching to live mode after /healthz answers — starts the new
+  /// session's camera while the old one is still handing its CameraX use cases
+  /// back. CameraX then refuses to bind:
+  ///
+  ///     No supported surface combination is found for camera device - Id : 0.
+  ///     Existing surfaces: [... captureTypes=[IMAGE_ANALYSIS] ...]
+  ///
+  /// and the viewfinder falls back to the no-camera stand-in for the rest of
+  /// the return. The photos are still taken, but they are taken by a screen
+  /// that cannot see — which is the one failure L0 exists to prevent.
+  ///
+  /// Both [start] and [dispose] queue here, so a teardown always completes
+  /// before the next open begins.
+  static Future<void> _cameraQueue = Future<void>.value();
+
+  static Future<T> _serialised<T>(Future<T> Function() action) {
+    final result = _cameraQueue.then((_) => action());
+    // Swallow the error *for the queue only*: one session failing to open must
+    // not poison every session after it. The caller still sees it.
+    _cameraQueue = result.then((_) {}, onError: (Object _) {});
+    return result;
+  }
 
   /// Everything here reports failure through [failure] rather than throwing:
   /// the caller is a `initState`, so an escaping exception would leave the
@@ -148,7 +208,8 @@ class CaptureSession extends ChangeNotifier {
             ? ImageFormatGroup.yuv420
             : ImageFormatGroup.bgra8888,
       );
-      await controller.initialize();
+      // Behind any session still tearing down — see [_cameraQueue].
+      await _serialised(controller.initialize);
       if (_disposed) {
         await controller.dispose();
         return;
@@ -158,6 +219,15 @@ class CaptureSession extends ChangeNotifier {
       await _resetZoom(controller);
 
       _detector = await CarDetector.load();
+      // Best effort, exactly like the detector: a phone that cannot load the
+      // recogniser keeps every other L0 check and simply never mentions plates.
+      if (expectedPlate.isNotEmpty) _plateReader = await PlateReader.load();
+      if (_logPlates) {
+        debugPrint(
+          'L0 車牌: reader=${_plateReader == null ? "無" : "就緒"} '
+          'expected=$expectedPlate',
+        );
+      }
       _evaluator.restart();
       await _startStream();
       failure = CaptureFailure.none;
@@ -234,6 +304,9 @@ class CaptureSession extends ChangeNotifier {
   /// would undo the widening they have been waiting on.
   void restartAim({bool keepElapsed = false}) {
     _evaluator.restart(keepElapsed: keepElapsed);
+    // Only the pending-mismatch streak resets; a plate already confirmed as
+    // this car stays confirmed across slots and retakes. See PlateWatcher.
+    _plates.restart();
     verdict = const AimVerdict(state: AimState.off, hint: '對齊輪廓線');
     notifyListeners();
   }
@@ -277,11 +350,15 @@ class CaptureSession extends ChangeNotifier {
         );
       }
 
+      _maybeReadPlate(pixels, now);
+
       verdict = _evaluator.evaluate(
         stats: stats,
         car: fresh,
         detectorAvailable: detector != null,
         requireGuide: _requireGuide,
+        plate: _plates.state,
+        plateSeen: _plates.lastSeen,
         now: now,
       );
       notifyListeners();
@@ -291,6 +368,65 @@ class CaptureSession extends ChangeNotifier {
       _analysing = false;
     }
   }
+
+  /// Crop to the car and send it to the recogniser, at most [_plateInterval].
+  ///
+  /// The sampling is **synchronous and on this callback** because a
+  /// `CameraImage`'s planes are recycled the moment [_onFrame] returns — the
+  /// copy is what goes to the async recogniser. That is also why [PlateReader.busy]
+  /// is checked before the sampling rather than inside `read`: dropping the
+  /// frame costs nothing, sampling one we are about to throw away costs a
+  /// megabyte of work in the frame loop.
+  void _maybeReadPlate(FramePixels pixels, DateTime now) {
+    final reader = _plateReader;
+    // Only the four corner slots — the cabin rows and the sun visor have no
+    // plate in shot, and _requireGuide is exactly "this slot is a body corner".
+    if (reader == null || reader.busy || !_requireGuide) return;
+    if (now.difference(_lastPlateRead) < _plateInterval) return;
+
+    // Crop to what the detector found. Without a box there is no car in frame,
+    // and OCR over the whole scene would mostly read the car park's signage.
+    final box = _evaluator.boxAt(now);
+    if (box == null) return;
+
+    final grown = box.inflate(_plateCropPadding);
+    final region = Rect.fromLTRB(
+      grown.left.clamp(0.0, 1.0),
+      grown.top.clamp(0.0, 1.0),
+      grown.right.clamp(0.0, 1.0),
+      grown.bottom.clamp(0.0, 1.0),
+    );
+    if (region.width <= 0.02 || region.height <= 0.02) return;
+
+    final rotation = _controller?.description.sensorOrientation ?? 90;
+    final upright = rotation == 90 || rotation == 270;
+    final srcW = (upright ? pixels.height : pixels.width) * region.width;
+    final srcH = (upright ? pixels.width : pixels.height) * region.height;
+    final scale = math.min(1.0, PlateReader.maxEdge / math.max(srcW, srcH));
+    // Both byte layouts subsample chroma 2×2, so an odd edge would leave the
+    // last row or column without one.
+    final outW = _even((srcW * scale).round());
+    final outH = _even((srcH * scale).round());
+    if (outW < 32 || outH < 32) return;
+
+    _lastPlateRead = now;
+    final luma = sampleRotatedLuma(pixels, rotation, region, outW, outH);
+    unawaited(
+      reader.read(luma, outW, outH).then((text) {
+        if (_disposed) return;
+        _plates.observe(text);
+        if (_logPlates) {
+          debugPrint(
+            'L0 車牌: ${outW}x$outH '
+            'ocr=${text?.replaceAll(RegExp(r"\s+"), " ").trim()} '
+            '候選=${extractPlates(text ?? "")} → ${_plates.state.name}',
+          );
+        }
+      }),
+    );
+  }
+
+  static int _even(int value) => value.isEven ? value : value - 1;
 
   /// 自動閃光燈 — 昏暗環境下自己亮起來，不必使用者去找按鈕。
   void _updateTorch(FrameStats stats) {
@@ -355,21 +491,30 @@ class CaptureSession extends ChangeNotifier {
   }
 
   @override
-  Future<void> dispose() async {
+  Future<void> dispose() {
     _disposed = true;
     _detector?.dispose();
     _detector = null;
+    _plateReader?.dispose();
+    _plateReader = null;
     final controller = _controller;
+    final streaming = _streaming;
+    final torch = _torchOn;
     _controller = null;
-    if (controller != null) {
+    _streaming = false;
+    super.dispose();
+
+    // Returned rather than awaited: the caller is a State.dispose(), which
+    // cannot wait. What matters is that the next start() queues behind this.
+    return _serialised(() async {
+      if (controller == null) return;
       try {
-        if (_streaming) await controller.stopImageStream();
-        if (_torchOn) await controller.setFlashMode(FlashMode.off);
+        if (streaming) await controller.stopImageStream();
+        if (torch) await controller.setFlashMode(FlashMode.off);
       } catch (_) {
         // The controller is going away either way.
       }
       await controller.dispose();
-    }
-    super.dispose();
+    });
   }
 }

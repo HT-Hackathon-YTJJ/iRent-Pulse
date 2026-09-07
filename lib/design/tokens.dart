@@ -61,6 +61,7 @@ class AppColor {
   static const aimOff = Color(0xFF4A4E49); // 未對準
   static const aimNear = Color(0xFFE8A33D); // 接近
   static const aimLocked = Color(0xFF1E9E5A); // 已對準
+  static const aimWrongCar = Color(0xFFE5342A); // 車輛不符
   static const zoomActive = Color(0xFFF8CB58);
 
   /// 未對準 fill of the alignment silhouette. Deliberately not [aimOff]: the

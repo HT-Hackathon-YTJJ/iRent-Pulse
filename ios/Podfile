@@ -1,5 +1,6 @@
 # Uncomment this line to define a global platform for your project
-# platform :ios, '15.0'
+# google_mlkit_text_recognition 的 pod 要求 iOS 15.5，比 Flutter 預設的 15.0 高。
+platform :ios, '15.5'
 
 # CocoaPods analytics sends network stats synchronously affecting flutter build latency.
 ENV['COCOAPODS_DISABLE_STATS'] = 'true'

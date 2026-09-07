@@ -1,7 +1,6 @@
 import 'dart:convert';
-import 'dart:io' show File, Platform;
+import 'dart:io' show File;
 
-import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 /// Client for the `api/` service — L1 快篩、L2 影像確認、L3 決策派工.
@@ -22,20 +21,32 @@ class InspectionApi {
 
   static const String _configured = String.fromEnvironment('API_BASE_URL');
 
-  static String get defaultBaseUrl {
-    if (_configured.isNotEmpty) return _configured;
-    // The Android emulator reaches the host loopback through 10.0.2.2; a real
-    // handset needs the LAN address passed in with --dart-define.
-    if (!kIsWeb && Platform.isAndroid) return 'http://10.0.2.2:8000';
-    return 'http://127.0.0.1:8000';
-  }
+  /// The deployed service (Fly.io, `api/fly.toml`).
+  ///
+  /// This is the default rather than a flag because of who installs the app: a
+  /// colleague who sideloads the APK has no laptop of ours on their Wi-Fi, and
+  /// a build that defaults to `10.0.2.2` silently falls back to the scripted
+  /// demo on their phone — the failure looks exactly like success. HTTPS also
+  /// keeps Android's cleartext policy and iOS ATS out of the way, which a LAN
+  /// address does not.
+  static const String deployedBaseUrl = 'https://irent-pulse-api.fly.dev';
+
+  /// Point at a local `api/run.sh` with
+  /// `flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8000`
+  /// (Android emulator) or `http://127.0.0.1:8000` (iOS simulator / web).
+  static String get defaultBaseUrl =>
+      _configured.isNotEmpty ? _configured : deployedBaseUrl;
 
   Uri _uri(String path) => Uri.parse('$baseUrl$path');
 
   /// True when the service answers. Checked once when the flow opens so the
   /// screen can fall back to the scripted demo instead of hanging on a socket.
+  /// The timeout is wide because the deployed machine stops when idle and the
+  /// first request of the day has to start it. Fly resumes a stopped VM in a
+  /// second or two, but 3s left no headroom, and a probe that times out drops
+  /// the whole return into the scripted demo without saying so.
   Future<bool> reachable({
-    Duration timeout = const Duration(seconds: 3),
+    Duration timeout = const Duration(seconds: 12),
   }) async {
     try {
       final response = await _client.get(_uri('/healthz')).timeout(timeout);

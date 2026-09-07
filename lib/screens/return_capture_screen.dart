@@ -46,6 +46,7 @@ class ReturnCaptureScreen extends StatefulWidget {
     this.frames = const {},
     this.onCaptured,
     this.session,
+    this.expectedPlate = '',
     this.startMisaligned = false,
     this.onLongPressTitle,
     this.onNoCamera,
@@ -76,6 +77,11 @@ class ReturnCaptureScreen extends StatefulWidget {
   /// Live L1 screening. Null (or not [ReturnSession.live]) runs the scripted
   /// demo instead of calling the backend.
   final ReturnSession? session;
+
+  /// The plate on the rental agreement, for the 車牌比對 on the four body
+  /// corners. Empty switches the check off — a scripted run with no camera has
+  /// nothing to read a plate from.
+  final String expectedPlate;
 
   /// 情境⑥ opens with the frame off-target.
   final bool startMisaligned;
@@ -139,7 +145,9 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
   /// no session behind them but still have a camera.
   late final Map<CaptureSpot, File> _frames = {...widget.frames};
 
-  final CaptureSession _camera = CaptureSession();
+  late final CaptureSession _camera = CaptureSession(
+    expectedPlate: widget.expectedPlate,
+  );
 
   /// Only used when there is no camera to read.
   late final _AimSimulator _simulator = _AimSimulator(
@@ -182,6 +190,25 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
     _pending.contains,
     orElse: () => widget.spots.first,
   );
+
+  /// The next slot with no photo in it, walking forward from [_current] and
+  /// wrapping.
+  ///
+  /// Forward-and-wrapping rather than "the first empty one" because the driver
+  /// is walking around a car and the strip is in the order of that walk. After
+  /// re-shooting the 左前 corner, sending them back to a missed 加油卡 shot at
+  /// the head of the strip means walking to the driver's door and back; the
+  /// next corner is the one they are already facing. It still gets picked up —
+  /// the wrap returns to it once the lap is done.
+  CaptureSpot? get _nextEmpty {
+    final spots = widget.spots;
+    final start = spots.indexOf(_current);
+    for (var step = 1; step <= spots.length; step++) {
+      final spot = spots[(start + step) % spots.length];
+      if (_pending.contains(spot)) return spot;
+    }
+    return null;
+  }
 
   bool get _liveCamera => _camera.ready;
 
@@ -305,7 +332,30 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
       return;
     }
 
-    setState(() => _current = _firstPending);
+    final next = _nextEmpty;
+    if (next == null) return;
+    setState(() => _current = next);
+    _camera.restartAim();
+    _simulator.restart();
+  }
+
+  /// Move to [spot] because the driver tapped its tile.
+  ///
+  /// Any slot, at any time — including one that already holds a photo, which is
+  /// how a retake works now. The strip used to be a read-out of a queue the
+  /// driver could not steer: the only way back to a shot they were unhappy with
+  /// was to finish all seven, wait for the analysis, and hope it flagged the one
+  /// they already knew about. Tapping the tile is the obvious gesture and it now
+  /// does the obvious thing.
+  ///
+  /// While 判定未達標 is up the tiles are inert. That panel is a question about
+  /// a specific frame — 重拍 or 仍要送出 — and walking away from it would leave
+  /// the held photo in limbo.
+  void _selectSpot(CaptureSpot spot) {
+    if (_reviewing || _capturing || spot == _current) return;
+    setState(() => _current = spot);
+    // A different slot is a different shot, so it gets the full strict window
+    // rather than inheriting the relaxation clock the last one had earned.
     _camera.restartAim();
     _simulator.restart();
   }
@@ -543,6 +593,8 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
               child: Center(
                 child: _BelowStandardPanel(
                   hint: verdict.hint,
+                  wrongCar: verdict.state == AimState.wrongCar,
+                  expectedPlate: widget.expectedPlate,
                   onSubmitAnyway: () => _commit(held),
                   onRetake: _retake,
                 ),
@@ -559,6 +611,7 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
               frames: _frames,
               current: _current,
               session: widget.session,
+              onSelect: _reviewing ? null : _selectSpot,
             ),
           ),
 
@@ -1023,6 +1076,7 @@ class _ShotStrip extends StatelessWidget {
     required this.frames,
     required this.current,
     this.session,
+    this.onSelect,
   });
 
   final List<CaptureSpot> spots;
@@ -1030,6 +1084,10 @@ class _ShotStrip extends StatelessWidget {
   final Map<CaptureSpot, File> frames;
   final CaptureSpot current;
   final ReturnSession? session;
+
+  /// Tapping a tile switches to that slot. Null while the 判定未達標 panel owns
+  /// the screen.
+  final void Function(CaptureSpot spot)? onSelect;
 
   @override
   Widget build(BuildContext context) {
@@ -1061,6 +1119,7 @@ class _ShotStrip extends StatelessWidget {
                     active: spot == current,
                     frame: session?.statusOf(spot).file ?? frames[spot],
                     status: session?.statusOf(spot),
+                    onTap: onSelect == null ? null : () => onSelect!(spot),
                   ),
                   if (spot != spots.last) const SizedBox(width: _stripGap),
                 ],
@@ -1093,11 +1152,15 @@ class _Tile extends StatelessWidget {
     required this.active,
     this.frame,
     this.status,
+    this.onTap,
   });
 
   final CaptureSpot spot;
   final bool captured;
   final bool active;
+
+  /// Switch to this slot. Null while the tiles are inert.
+  final VoidCallback? onTap;
 
   /// The photo taken for this slot, once there is one.
   final File? frame;
@@ -1107,7 +1170,7 @@ class _Tile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final file = frame;
-    return Container(
+    final tile = Container(
       width: _stripSize,
       height: _stripSize,
       decoration: BoxDecoration(
@@ -1130,6 +1193,16 @@ class _Tile extends StatelessWidget {
             Positioned(right: 3, bottom: 3, child: _SlotBadge(phase: status!.phase)),
         ],
       ),
+    );
+
+    if (onTap == null) return tile;
+    // opaque so the whole 72pt tile is the target, including the transparent
+    // parts of a slot indicator — at arm's length, on a phone the driver is
+    // holding up, the icon's own ink is not a hit area anybody can find.
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: tile,
     );
   }
 }
@@ -1182,10 +1255,19 @@ class _BelowStandardPanel extends StatelessWidget {
     required this.onSubmitAnyway,
     required this.onRetake,
     this.hint,
+    this.wrongCar = false,
+    this.expectedPlate = '',
   });
 
   final VoidCallback onSubmitAnyway;
   final VoidCallback onRetake;
+
+  /// The plate read in frame is not this rental's. Gets its own headline
+  /// because it is not a framing problem and 判定未達標 would send the driver
+  /// looking for one.
+  final bool wrongCar;
+
+  final String expectedPlate;
 
   /// Whatever L0 was unhappy about at the moment of the press, so the panel
   /// says something useful instead of only "未達標" — and says it about the
@@ -1194,6 +1276,23 @@ class _BelowStandardPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (wrongCar) {
+      return _GlassPanel(
+        title: '車輛不符',
+        // The plate that *was* read is deliberately not quoted back. It has
+        // been through the glyph folding in plate.dart, so `BCD` may read as
+        // `8CD` — a mangled plate on screen next to a correct one reads as a
+        // broken app, and argues with a driver who can see their own bumper.
+        body: expectedPlate.isEmpty
+            ? '畫面中的車牌與本次租借的車輛不符，請確認是否站在正確的車輛前。仍可直接送出，後續檢測會再確認一次。'
+            : '畫面中的車牌與本次租借的 $expectedPlate 不符，請確認是否站在正確的車輛前。'
+                  '仍可直接送出，後續檢測會再確認一次。',
+        actions: [
+          _PanelAction(label: '仍要送出', onTap: onSubmitAnyway, filled: false),
+          _PanelAction(label: '重拍這張', onTap: onRetake, filled: true),
+        ],
+      );
+    }
     return _GlassPanel(
       title: '判定未達標',
       body: hint == null

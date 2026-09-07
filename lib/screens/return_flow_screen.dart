@@ -31,7 +31,7 @@ class ReturnFlowScreen extends StatefulWidget {
     super.key,
     this.scenario = ReturnScenario.allClear,
     this.orderId = '47352776',
-    this.carNo = 'RDS-6583',
+    this.carNo,
     this.vehicle = corollaCross,
   });
 
@@ -42,7 +42,10 @@ class ReturnFlowScreen extends StatefulWidget {
 
   /// Carried on every L1 call and used by L2 to find this trip's pickup photos.
   final String orderId;
-  final String carNo;
+  /// Overrides the plate for a run that is not about [vehicle] — a test, or a
+  /// scripted scenario. Normally null, and then the car being handed back is
+  /// the one the driver has been looking at all along: see [_ReturnFlowScreenState._carNo].
+  final String? carNo;
 
   @override
   State<ReturnFlowScreen> createState() => _ReturnFlowScreenState();
@@ -73,9 +76,20 @@ class _ReturnFlowScreenState extends State<ReturnFlowScreen> {
   /// driver's own photos across a retake.
   final Map<CaptureSpot, File> _frames = {};
 
+  /// The plate of the car being returned.
+  ///
+  /// Defaults to [VehicleProfile.plate] rather than to a literal. It used to be
+  /// a hard-coded `RDS-6583` while the car on screen — the one in the booking
+  /// sheet, the trip card and the 車輛資訊 header — was `REN-0000`, so every L1
+  /// upload was filed against a car the driver had never seen. Harmless while
+  /// nothing compared the two; the moment L0 started reading plates it became
+  /// the viewfinder telling the driver 「這不是你租的車」 about the car the app
+  /// itself had rented them.
+  String get _carNo => widget.carNo ?? widget.vehicle.plate;
+
   late final ReturnSession _session = ReturnSession(
     orderId: widget.orderId,
-    carNo: widget.carNo,
+    carNo: _carNo,
   );
 
   /// True when the backend answered and this run is doing the real thing.
@@ -114,7 +128,11 @@ class _ReturnFlowScreenState extends State<ReturnFlowScreen> {
     // to judge. `Order.started_at` is stamped by the first L1 upload.
     unawaited(_session.publishBoard(widget.vehicle.reviews));
     if (widget.scenario == ReturnScenario.allClear) {
-      _restart(ReturnScenario.live);
+      // Not _restart: this runs from initState, so there is nothing to reset —
+      // and _restart bumps _captureRun, which remounts the viewfinder and tears
+      // the camera down a second after it opened. Switching the scenario is the
+      // whole of what going live means here.
+      setState(() => _scenario = ReturnScenario.live);
     }
   }
 
@@ -273,6 +291,10 @@ class _ReturnFlowScreenState extends State<ReturnFlowScreen> {
       frames: _frames,
       onCaptured: (spot, file) => _frames[spot] = file,
       session: _live ? _session : null,
+      // The 車牌比對 compares against the car on the rental agreement — the
+      // same string every L1 upload is keyed by, so there is one answer to
+      // "which car is this" and the viewfinder and the backend share it.
+      expectedPlate: _carNo,
       startMisaligned: _scenario.startsMisaligned && !_resolved,
       onFinished: () => setState(() {
         _taken = {..._taken, ..._pending};
