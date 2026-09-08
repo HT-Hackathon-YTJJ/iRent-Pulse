@@ -206,16 +206,23 @@ L0 車牌: 720x600 ocr=ABC-1234 候選=[A8C1234] → mismatch
 
       規則放在 `android/app/proguard-rules.pro`。實機用 release build 驗過
       `L0 車牌: reader=就緒 expected=REN-0000`
-- [ ] 決定要附哪幾個 APK。`--split-per-abi`：arm64-v8a 50 MB（近八年的手機都是
-      這個）、armeabi-v7a 41 MB、x86_64 54 MB；不分的話單一 universal APK 115 MB
+- [x] **2026-09-08** 決定只附兩個：**arm64-v8a 50 MB**（近八年的手機都是這個，
+      叫同仁拿這個）與 **universal 115 MB** 當 fallback。armeabi-v7a（41 MB）
+      與 x86_64（54 MB）沒附——前者要十年前的手機才用得到，後者只有模擬器
 - [ ] `flutter build ipa`（目前沒有 TestFlight，先產出檔案）。**建議先不要放進
       release**：第 5 項寫的 iOS 從來沒有在真機上跑過一行，BGRA8888 那條路徑
       也沒驗過，附一個沒人測過又裝不了的 IPA 只會讓人以為它能用
-- [ ] 開 GitHub Release `v1.0.0`，附上 APK 與 IPA
-- [ ] Release note 寫清楚：APK 要允許「安裝未知來源應用程式」；App 預設打
-      `https://irent-pulse-api.fly.dev`，不需要連我們的 Wi-Fi
+- [x] **2026-09-08** 開了 GitHub Release `v1.0.0`（只有 Android）：
+      <https://github.com/HT-Hackathon-YTJJ/iRent-Pulse/releases/tag/v1.0.0>
+- [x] **2026-09-08** Release note 寫了：裝哪一個、怎麼允許未知來源、要哪些權限、
+      不需要連我們的 Wi-Fi、後端連不上會退回腳本情境，以及三個已知限制
+      （沒有 iOS、debug key 簽章、Store 停機會清空）
 
 發版前記得確認 `InspectionApi.deployedBaseUrl` 指向正確、且 Fly 上的 App 是醒著的。
+2026-09-08 這次兩件都確認過：`api/` 重新部署後實機用預設網址跑通了整條路。
+
+**下一版要記得**：`pubspec.yaml` 的 `version:` 還停在 `1.0.0+1`，發 v1.0.1 之前
+要先往上加，不然兩個版本的 versionCode 一樣，Android 不會讓你蓋上去。
 
 ---
 
