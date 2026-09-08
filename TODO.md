@@ -175,15 +175,17 @@ L0 車牌: 720x600 ocr=ABC-1234 候選=[A8C1234] → mismatch
 
 拍照流程與分析頁在 2026-09-08 大改了一輪，見下面「已完成」。其中一項有先後順序：
 
-- [ ] **`api/` 要重新部署到 Fly**（`tool/deploy_fly.sh`）。App 預設打
-      `https://irent-pulse-api.fly.dev`，而線上那一版**還是 9/07 的程式碼**——
-      沒有 `SlotKind.card`、沒有卡套 prompt、也不會回
-      `parking_card_present`／`fuel_card_present`。在部署之前，用預設網址跑
-      真實檢測的話，第一個 slot 會走到「判斷車身漆面」的 prompt 並要求重拍
-      （就是第 3 項那個 bug），分析頁的「停車卡不在車上」卡片也永遠不會出現。
+- [x] **2026-09-08** `api/` 已重新部署到 Fly（`tool/deploy_fly.sh`）。在那之前
+      線上跑的還是 9/07 的程式碼——沒有 `SlotKind.card`、沒有卡套 prompt，
+      第一個 slot 會掉進「判斷車身漆面」並要求重拍。
 
-      本機驗證是用 `adb reverse tcp:8000 tcp:8000` 加
-      `--dart-define=API_BASE_URL=http://localhost:8000` 跑的，不需要動線上。
+      部署後直接對 `https://irent-pulse-api.fly.dev/v1/l1/screen` 送
+      `demo/return_photos/加油卡和停車卡.webp` 驗過：`assessable=true`、
+      `retake_required=false`、`停車卡=false`、`加油卡=true`。
+      實機用預設網址（不經 `adb reverse`）也跑通了同一張。
+
+      **本機要改 prompt 時**用 `adb reverse tcp:8000 tcp:8000` 加
+      `--dart-define=API_BASE_URL=http://localhost:8000`，不用每次都推線上。
 
 ---
 
