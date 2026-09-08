@@ -193,8 +193,24 @@ L0 車牌: 720x600 ocr=ABC-1234 候選=[A8C1234] → mismatch
 
 上面都確認可以運作之後才做。
 
-- [ ] `flutter build apk --release`（Android 同仁 sideload 用）
-- [ ] `flutter build ipa`（目前沒有 TestFlight，先產出檔案）
+- [x] **2026-09-08** `flutter build apk --release` 可以跑了——**在此之前它是壞的**。
+      R8 在 release 才會跑，所以這個 bug 從來沒有人撞到過，而它有兩層：
+      1. 建置直接失敗。`google_mlkit_text_recognition` 在同一個 `initialize`
+         裡宣告了 ML Kit 支援的每一種文字（拉丁、中、日、韓、天城文），但每一種
+         的模型是**各自獨立**的 Gradle 相依，這個 App 只拉了拉丁那一個。
+      2. 修掉之後建置會過，但 App 起來會在 logcat 印
+         `ComponentDiscovery: NoSuchMethodException: TextRegistrar.<init> []`
+         ——**不會 crash，只是文字辨識器安靜地沒有註冊**，也就是每一個同仁裝到的
+         版本車牌比對都是死的。ML Kit 是靠 manifest 裡的 `<meta-data>` 反射
+         實體化 `ComponentRegistrar`，R8 看不到呼叫端就把無參數建構子拿掉了。
+
+      規則放在 `android/app/proguard-rules.pro`。實機用 release build 驗過
+      `L0 車牌: reader=就緒 expected=REN-0000`
+- [ ] 決定要附哪幾個 APK。`--split-per-abi`：arm64-v8a 50 MB（近八年的手機都是
+      這個）、armeabi-v7a 41 MB、x86_64 54 MB；不分的話單一 universal APK 115 MB
+- [ ] `flutter build ipa`（目前沒有 TestFlight，先產出檔案）。**建議先不要放進
+      release**：第 5 項寫的 iOS 從來沒有在真機上跑過一行，BGRA8888 那條路徑
+      也沒驗過，附一個沒人測過又裝不了的 IPA 只會讓人以為它能用
 - [ ] 開 GitHub Release `v1.0.0`，附上 APK 與 IPA
 - [ ] Release note 寫清楚：APK 要允許「安裝未知來源應用程式」；App 預設打
       `https://irent-pulse-api.fly.dev`，不需要連我們的 Wi-Fi
