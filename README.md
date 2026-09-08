@@ -441,10 +441,10 @@ api/.venv/bin/python -m pytest api/tests -q     # 伺服器（不需要起 serve
 | 檔案 | 釘住什麼 |
 | --- | --- |
 | `test/l0_test.dart` | 清晰度／曝光／旋轉取樣、`fill`／`drift` 各自的語意、平滑與時效、遲滯、出血格不報「被切到」、門檻放寬 |
-| `test/capture_slots_test.dart` | 拍攝順序、每格的圖檔對到自己的角度、只有前兩格出血且互為鏡像、四層圖都在 bundle 裡、`guideAspect` 與圖檔相符 |
+| `test/capture_slots_test.dart` | 拍攝順序、每格的圖檔對到自己的角度、只有前兩格出血且互為鏡像、每格的匡線種類與門檻放寬、只有四個車角的匡線圖在 bundle 裡（另外三格**不該**在）、`guideAspect` 與圖檔相符 |
 | `test/trip_state_test.dart` | 租約狀態的存／取／清除，還車後不會復活 |
-| `test/return_session_test.dart` | 用假的 L1 回應把逐張回報與 issue 文案跑過一遍 |
-| `test/return_capture_widget_test.dart` | 沒有相機時取景器照樣能走完 |
+| `test/return_session_test.dart` | 用假的 L1 回應把逐張回報與問題卡片跑過一遍：每個問題都要有自己的卡片（不是只有最嚴重的那個）、缺卡不要求重拍、看不到的插袋不算缺卡、答案晚到也要進計數 |
+| `test/return_capture_widget_test.dart` | 沒有相機時取景器照樣能走完；膠捲在 346×771（實機尺寸）上七格都點得動——預設的 800×600 測試畫布放得下整條膠捲，這個 bug 在那裡看不到 |
 | `api/tests/test_board.py` | 留言板的解析，以及「留言只能往『既有』推」這條單向規則 |
 | `api/tests/test_store.py` | 留言板的儲存與「只採計本趟開始前」的時間切點 |
 | `api/tests/test_l3.py` | L3 規則表，以及留言如何被帶進車況履歷 |
@@ -518,10 +518,12 @@ api/.venv/bin/python api/scripts/demo_trip.py \
 
 ### 真實模式 vs 腳本情境
 
-進還車流程時會先探測 `api/` 是否活著（`/healthz`，3 秒逾時）：
+進還車流程時會先探測 `api/` 是否活著（`/healthz`，12 秒逾時——Fly 的機器閒置
+會停機，喚醒要一兩秒，3 秒沒有餘裕，而探測逾時會把整個還車默默丟進腳本情境）：
 
 * **探得到** → 情境 ⓪「真實 AI 檢測」：相機跑 L0，每拍完一張立刻送 L1，
-  分析頁逐張回報（`左前 ✓ 右前 ✓ 左後 ⏳`），離開頁面時才跑 L2／L3。
+  每張的答案一回來就更新那一格（膠捲上的 ⏳／✓／琥珀警告），離開頁面時才跑
+  L2／L3。分析頁會把所有問題各給一張卡片。
 * **探不到** → 原本 Figma 板上的六個腳本情境照跑，一行程式都不會動到。
 
 長按取景器標題可以隨時切換，Demo 現場網路掛掉也不會開天窗。
