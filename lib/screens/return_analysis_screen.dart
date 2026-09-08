@@ -1,3 +1,5 @@
+import 'dart:io' show File;
+
 import 'package:flutter/material.dart';
 
 import '../data/return_inspection.dart';
@@ -8,10 +10,16 @@ import '../widgets/return_footer.dart';
 /// 還車分析中 → 還車分析完成 (Figma 825:3149, 827:4377, 830:5248).
 ///
 /// Both states are one page: the bars fill, the verdict lines swap in, and the
-/// footer appears. Only two things are ever reported here — whether the photos
+/// footer appears. Only two things are ever *scored* here — whether the photos
 /// can be read and whether the cabin is clean. Damage is deliberately absent;
 /// that comparison runs in the back office and reaches the driver, if at all,
 /// as a push hours later.
+///
+/// Under the two bars, every problem the return actually has gets its own card:
+/// the photo it is about on the left, L1's own words for it on the right. That
+/// replaced a second screen which showed *one* problem and asked for a retake —
+/// so a driver with two bad photos learned about the second only after redoing
+/// the first, and never knew a second was coming.
 class ReturnAnalysisScreen extends StatefulWidget {
   const ReturnAnalysisScreen({
     super.key,
@@ -23,10 +31,8 @@ class ReturnAnalysisScreen extends StatefulWidget {
   final ReturnAnalysis analysis;
   final VoidCallback onContinue;
 
-  /// Live L1 screening. When present the page settles on the *answers*, not on
-  /// a timer — and it shows the per-photo row while it waits, because a single
-  /// spinner over six parallel calls is what makes 26% of drivers feel they are
-  /// waiting on the slowest one.
+  /// Live L1 screening. When present the page settles on the *answers* rather
+  /// than on a timer.
   final ReturnSession? session;
 
   @override
@@ -64,8 +70,6 @@ class _ReturnAnalysisScreenState extends State<ReturnAnalysisScreen>
 
   @override
   Widget build(BuildContext context) {
-    final a = widget.analysis;
-
     return Scaffold(
       backgroundColor: Colors.white,
       body: AnimatedBuilder(
@@ -76,6 +80,17 @@ class _ReturnAnalysisScreenState extends State<ReturnAnalysisScreen>
           // Each bar settles on its own clock; the page turns over once the
           // slower of the two lands.
           final live = widget.session;
+
+          // Recomputed **inside** the builder, not read off `widget`.
+          //
+          // The photos are still in flight when this page opens — that overlap
+          // is the whole point of 逐張回報 — so `widget.analysis` is a snapshot
+          // of whatever had answered at the moment the flow switched screens.
+          // Nothing rebuilds the flow after that, so the page kept that
+          // snapshot for ever: seven photos were taken, five had come back, and
+          // the page said 「5 張照片皆可判讀」 with a straight face while the
+          // other two landed unread behind it.
+          final a = live?.analysis ?? widget.analysis;
           // Wait on work that is actually in flight. Waiting on "no answers
           // yet" instead would hang this page forever in the one case where
           // nothing was ever uploaded.
@@ -133,10 +148,11 @@ class _ReturnAnalysisScreenState extends State<ReturnAnalysisScreen>
                               progress: _cabin.value,
                               settled: cabinDone,
                             ),
-                            if (live != null) ...[
-                              const SizedBox(height: 16),
-                              _PerPhotoRow(session: live),
-                            ],
+                            if (settled)
+                              for (final finding in a.findings) ...[
+                                const SizedBox(height: 12),
+                                _FindingCard(finding: finding),
+                              ],
                             const SizedBox(height: 19),
                             _Footnote(settled: settled),
                           ],
@@ -169,86 +185,6 @@ class _ReturnAnalysisScreenState extends State<ReturnAnalysisScreen>
   }
 }
 
-/// 逐張回報 — 左前 ✓ 右前 ✓ 左後 ⏳ 右後 ✗.
-///
-/// A rejected frame can be retaken while the others are still in flight, which
-/// turns a serial wait into an overlapping one.
-class _PerPhotoRow extends StatelessWidget {
-  const _PerPhotoRow({required this.session});
-
-  final ReturnSession session;
-
-  @override
-  Widget build(BuildContext context) {
-    final spots = session.reportedSpots;
-    if (spots.isEmpty) return const SizedBox.shrink();
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      alignment: WrapAlignment.center,
-      children: [
-        for (final spot in spots) _PhotoChip(spot: spot, status: session.statusOf(spot)),
-      ],
-    );
-  }
-}
-
-class _PhotoChip extends StatelessWidget {
-  const _PhotoChip({required this.spot, required this.status});
-
-  final CaptureSpot spot;
-  final SlotStatus status;
-
-  @override
-  Widget build(BuildContext context) {
-    final (Color color, Widget mark) = switch (status.phase) {
-      SlotPhase.passed => (
-        AppColor.successText,
-        const Icon(Icons.check, size: 13, color: AppColor.successText),
-      ),
-      SlotPhase.retake => (
-        AppColor.aimNear,
-        const Icon(Icons.refresh, size: 13, color: AppColor.aimNear),
-      ),
-      SlotPhase.failed => (
-        AppColor.textMuted,
-        const Icon(Icons.cloud_off, size: 13, color: AppColor.textMuted),
-      ),
-      _ => (
-        AppColor.textProcessing,
-        const SizedBox(
-          width: 11,
-          height: 11,
-          child: CircularProgressIndicator(
-            strokeWidth: 1.6,
-            color: AppColor.textProcessing,
-          ),
-        ),
-      ),
-    };
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border.all(color: AppColor.divider),
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            spot.label,
-            style: TextStyle(fontSize: 13, height: 1.2, color: color),
-          ),
-          const SizedBox(width: 6),
-          mark,
-        ],
-      ),
-    );
-  }
-}
-
 class _Footnote extends StatelessWidget {
   const _Footnote({required this.settled});
 
@@ -270,8 +206,14 @@ class _Footnote extends StatelessWidget {
   }
 }
 
-/// One 113.778pt card: title, bar, verdict line — all absolutely placed so the
-/// two states line up pixel for pixel as the copy under the bar changes.
+/// One card: title, bar, verdict line.
+///
+/// Laid out as a column, not as absolute positions inside a fixed 113.778pt
+/// box, which is what the Figma frame is and what this used to be. The verdict
+/// line is the problem with that: 「後座和右後不通過」 wraps to two lines on a
+/// 346dp screen and the second one was drawn straight through the bottom of
+/// the card. The Figma height is reproduced by the paddings when the copy fits
+/// on one line, and the card simply grows when it does not.
 class _CheckCard extends StatelessWidget {
   const _CheckCard({
     required this.check,
@@ -294,7 +236,8 @@ class _CheckCard extends StatelessWidget {
     final trackColor = settled ? AppColor.barTrack : AppColor.track;
 
     return Container(
-      height: 113.778,
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(_cardPad, 17.22, _cardPad, 18),
       decoration: BoxDecoration(
         color: Colors.white,
         border: Border.all(color: AppColor.divider, width: 1.497),
@@ -307,65 +250,177 @@ class _CheckCard extends StatelessWidget {
           ),
         ],
       ),
-      child: Stack(
-        clipBehavior: Clip.none,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Positioned(
-            left: _cardPad,
-            top: 17.22,
-            child: Text(check.title, style: ReturnText.cardTitle),
+          Text(check.title, style: ReturnText.cardTitle),
+          const SizedBox(height: 13),
+          Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Container(
+                height: 8.982,
+                decoration: BoxDecoration(
+                  color: trackColor,
+                  borderRadius: BorderRadius.circular(4.491),
+                ),
+              ),
+              LayoutBuilder(
+                builder: (context, constraints) => Container(
+                  height: 8.982,
+                  width: constraints.maxWidth * fill.clamp(0.0, 1.0),
+                  decoration: BoxDecoration(
+                    color: barColor,
+                    borderRadius: BorderRadius.circular(4.491),
+                  ),
+                ),
+              ),
+              if (!settled)
+                Positioned(
+                  left: (_barWidth * fill - 18).clamp(0.0, _barWidth - 18),
+                  top: 4.1,
+                  child: Text(
+                    '${(fill * 100).round()}%',
+                    style: const TextStyle(
+                      fontSize: 8,
+                      color: AppColor.textPrimary,
+                    ),
+                  ),
+                ),
+            ],
           ),
-          Positioned(
-            left: _cardPad,
-            top: 52.4,
+          const SizedBox(height: 10),
+          Text(
+            settled ? check.resultLabel : check.pendingLabel,
+            style: ReturnText.cardStatus.copyWith(
+              color: settled ? check.resultColor : AppColor.textProcessing,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One problem, with the photo it is about.
+///
+/// Full width, stacked vertically, one card per problem. The content is
+/// inherently horizontal — a thumbnail and a sentence — and at 346dp a
+/// two-column grid leaves about 160pt per card, which holds neither a
+/// recognisable photo nor a readable sentence. Stacking also degrades
+/// properly: three or four problems is a longer scroll and nothing else, where
+/// a grid would need a second card design at the point the driver is having
+/// the worst day.
+class _FindingCard extends StatelessWidget {
+  const _FindingCard({required this.finding});
+
+  final ReturnFinding finding;
+
+  static const double _thumb = 66;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: AppColor.divider, width: 1.497),
+        borderRadius: BorderRadius.circular(17.965),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x14000000),
+            blurRadius: 5.988,
+            offset: Offset(0, 2.994),
+          ),
+        ],
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(10),
             child: SizedBox(
-              width: _barWidth,
-              child: Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  Container(
-                    height: 8.982,
-                    decoration: BoxDecoration(
-                      color: trackColor,
-                      borderRadius: BorderRadius.circular(4.491),
+              width: _thumb,
+              height: _thumb,
+              child: _thumbnail(),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 15,
+                      height: 15,
+                      alignment: Alignment.center,
+                      decoration: const BoxDecoration(
+                        color: AppColor.aimNear,
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.priority_high,
+                        size: 11,
+                        color: Colors.white,
+                      ),
                     ),
-                  ),
-                  Container(
-                    height: 8.982,
-                    width: _barWidth * fill.clamp(0.0, 1.0),
-                    decoration: BoxDecoration(
-                      color: barColor,
-                      borderRadius: BorderRadius.circular(4.491),
-                    ),
-                  ),
-                  if (!settled)
-                    Positioned(
-                      left: (_barWidth * fill - 18).clamp(0.0, _barWidth - 18),
-                      top: 4.1,
+                    const SizedBox(width: 6),
+                    Expanded(
                       child: Text(
-                        '${(fill * 100).round()}%',
+                        finding.title,
                         style: const TextStyle(
-                          fontSize: 8,
+                          fontSize: 15,
+                          height: 1.3,
+                          fontWeight: FontWeight.w700,
                           color: AppColor.textPrimary,
                         ),
                       ),
                     ),
-                ],
-              ),
-            ),
-          ),
-          Positioned(
-            left: _cardPad,
-            right: _cardPad,
-            top: 71.86,
-            child: Text(
-              settled ? check.resultLabel : check.pendingLabel,
-              style: ReturnText.cardStatus.copyWith(
-                color: settled ? check.resultColor : AppColor.textProcessing,
-              ),
+                  ],
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  finding.reason,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    height: 19 / 13,
+                    color: AppColor.textSecondary,
+                  ),
+                ),
+              ],
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  /// The driver's own frame. A scripted run has none, so the slot's 示意圖
+  /// stands in — it says which shot the card is about, which is the thumbnail's
+  /// whole job, without pretending to be a photograph that was never taken.
+  Widget _thumbnail() {
+    final File? photo = finding.photo;
+    if (photo != null) {
+      return Image.file(
+        photo,
+        fit: BoxFit.cover,
+        // 66pt on a 3x screen; the full-size decode is what made the strip
+        // stutter and there is no reason to repeat it here.
+        cacheWidth: 256,
+      );
+    }
+    final spot = finding.spot;
+    if (spot == null) return const ColoredBox(color: AppColor.track);
+    return ColoredBox(
+      color: AppColor.track,
+      child: Padding(
+        padding: const EdgeInsets.all(6),
+        child: Image.asset(spot.slotIcon, fit: BoxFit.contain),
       ),
     );
   }

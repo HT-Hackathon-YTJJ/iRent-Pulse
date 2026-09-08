@@ -2,6 +2,7 @@
 
     api/.venv/bin/python api/scripts/smoke.py exterior 左前 assets/images/return/camera_scene.png
     api/.venv/bin/python api/scripts/smoke.py interior 後座 assets/images/return/shot_interior.jpg
+    api/.venv/bin/python api/scripts/smoke.py card 加油卡/停車卡 demo/return_photos/加油卡和停車卡.webp
     api/.venv/bin/python api/scripts/smoke.py pair 左前 return.jpg pickup.jpg
 """
 
@@ -13,7 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app import l1, l2  # noqa: E402
-from app.models import Stage  # noqa: E402
+from app.models import SlotKind, Stage  # noqa: E402
 
 
 async def main() -> None:
@@ -37,7 +38,7 @@ async def main() -> None:
             car_no="RDS-6583",
             stage=Stage.ret,
             slot=slot,
-            interior=(mode == "interior"),
+            kind=SlotKind(mode),
             l0={"passed": True, "car_coverage": 0.62, "blur_score": 128.4},
         )
 

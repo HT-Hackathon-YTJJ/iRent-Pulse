@@ -19,6 +19,8 @@ Map<String, Object?> l1Json({
   String? hint,
   String? cleanliness,
   List<String> items = const [],
+  bool? parkingCard,
+  bool? fuelCard,
   String? error,
 }) => {
   'photo_id': 'p_$slot',
@@ -33,6 +35,8 @@ Map<String, Object?> l1Json({
   'coverage_adequate': true,
   'cleanliness': cleanliness,
   'items': items,
+  'parking_card_present': parkingCard,
+  'fuel_card_present': fuelCard,
   'observed_damages': const <Object?>[],
   'max_severity': 'none',
   'error': error,
@@ -110,17 +114,21 @@ void main() {
     expect(session.statusOf(CaptureSpot.rearRight).phase, SlotPhase.retake);
     expect(session.retakeSpots, [CaptureSpot.rearRight]);
 
-    final issue = session.analysis.issue!;
-    expect(issue.emphasis, '右後');
-    expect(issue.body, contains('整片反光'));
-    expect(issue.body, contains('避開光源'));
-    expect(issue.retakeSpot, CaptureSpot.rearRight);
+    final finding = session.analysis.findings.single;
+    expect(finding.spot, CaptureSpot.rearRight);
+    expect(finding.title, '右後不通過');
+    expect(finding.reason, contains('整片反光'));
+    expect(finding.reason, contains('避開光源'));
+    // The card carries the driver's own frame, which is the whole point of it.
+    expect(finding.photo, frame);
     expect(session.analysis.photo.ok, isFalse);
+    expect(session.analysis.photo.resultLabel, '右後不通過');
   });
 
-  test('a dirty cabin outranks a photo that needs retaking', () async {
-    // L3 rule 1 before rule 6, and the driver-facing flow has to agree: dirt is
-    // the only thing anyone is asked to fix on the spot.
+  test('every problem gets a card, not just the worst one', () async {
+    // This used to rank them and show one. A driver with a dirty cabin *and* an
+    // unreadable frame was told about the cabin, and found out about the photo
+    // only after redoing the cabin shot and waiting for a second analysis.
     final (session, _) = sessionReturning(
       (slot) => slot == '後座'
           ? l1Json(slot: slot, cleanliness: '髒汙', items: ['飲料杯', '紙袋'])
@@ -137,11 +145,54 @@ void main() {
     final analysis = session.analysis;
     expect(analysis.cabin.ok, isFalse);
     expect(analysis.cabin.resultLabel, contains('飲料杯'));
-    expect(analysis.issue!.retakeSpot, CaptureSpot.interiorRear);
-    expect(analysis.issue!.title, '車內偵測到垃圾');
+
+    // Both, in strip order — 後座 is slot 3, 左前 is slot 4.
+    expect(analysis.findings.map((f) => f.spot).toList(), [
+      CaptureSpot.interiorRear,
+      CaptureSpot.frontLeft,
+    ]);
+    expect(analysis.findings.first.title, '後座有垃圾');
+    expect(analysis.findings.first.reason, contains('飲料杯'));
+    expect(analysis.findings.last.title, '左前不通過');
   });
 
-  test('a clean cabin and readable photos produce no issue', () async {
+  test('a missing card is reported without demanding a retake', () async {
+    // The photo is perfectly readable — the *parking card* is what is missing,
+    // and no amount of re-photographing an empty pocket fixes that. So the
+    // readability bar stays green and the problem gets its own card.
+    final (session, _) = sessionReturning(
+      (slot) => l1Json(slot: slot, parkingCard: false, fuelCard: true),
+    );
+    await session.submit(CaptureSpot.fuelCard, shot());
+
+    final analysis = session.analysis;
+    expect(session.statusOf(CaptureSpot.fuelCard).phase, SlotPhase.passed);
+    expect(analysis.photo.ok, isTrue);
+    expect(analysis.findings.single.title, '停車卡不在車上');
+    expect(analysis.findings.single.spot, CaptureSpot.fuelCard);
+  });
+
+  test('a pocket L1 could not see is not a missing card', () async {
+    // null is "could not tell", and telling somebody a card is gone on the
+    // strength of not having seen it is the one thing this must not do.
+    final (session, _) = sessionReturning((slot) => l1Json(slot: slot));
+    await session.submit(CaptureSpot.fuelCard, shot());
+    expect(session.analysis.findings, isEmpty);
+  });
+
+  test('the count is of every answer, including ones that land late', () async {
+    // The analysis page reads this getter on every notification rather than
+    // snapshotting it when the page opens — seven photos are still in flight
+    // while the page is up, and it used to keep whichever count it saw first
+    // and report 「5 張照片皆可判讀」 after all seven had come back.
+    final (session, _) = sessionReturning((slot) => l1Json(slot: slot));
+    for (var i = 0; i < CaptureSpot.values.length; i++) {
+      await session.submit(CaptureSpot.values[i], shot());
+      expect(session.analysis.photo.resultLabel, '${i + 1} 張照片皆可判讀');
+    }
+  });
+
+  test('a clean cabin and readable photos produce no findings', () async {
     final (session, _) = sessionReturning(
       (slot) => slot == '後座'
           ? l1Json(slot: slot, cleanliness: '乾淨')
@@ -166,7 +217,7 @@ void main() {
     expect(status.phase, SlotPhase.failed);
     expect(status.message, contains('稍後通知'));
     // Nothing is asked of the driver: L3 handles the car via system_error.
-    expect(session.analysis.issue, isNull);
+    expect(session.analysis.findings, isEmpty);
   });
 
   test('an unreachable service is a failure, not a retake loop', () async {

@@ -12,16 +12,19 @@ import '../services/trip_state.dart';
 import 'return_analysis_screen.dart';
 import 'return_capture_screen.dart';
 import 'return_done_screen.dart';
-import 'return_issue_screen.dart';
 import 'return_release_screen.dart';
 
 /// The 還車拍照 flow end to end (Figma group 986:1342).
 ///
-/// Every step lives on one route rather than a stack of pushes, because the
-/// board's branches loop: a retake sends the driver back to the viewfinder for
-/// a single slot and then forward through the same analysis page. Modelling
-/// that as a step machine keeps the back stack honest — there is one thing to
-/// leave, and leaving it abandons the return.
+/// Every step lives on one route rather than a stack of pushes: there is one
+/// thing to leave, and leaving it abandons the return.
+///
+/// There used to be a fifth step between the analysis and the release — one
+/// screen about one problem, with a 重拍 button on it. It is gone. The analysis
+/// page reports every problem the return has, each with the photo it is about
+/// and L1's own words for it, which is strictly more than that screen could say
+/// and says it without a second round trip. Retaking is still possible and
+/// always was: tapping a tile in the viewfinder goes back to that slot.
 ///
 /// Which branch plays is decided by [ReturnScenario]. Long-pressing the
 /// viewfinder title opens the picker, which is how the six board scenarios are
@@ -51,7 +54,7 @@ class ReturnFlowScreen extends StatefulWidget {
   State<ReturnFlowScreen> createState() => _ReturnFlowScreenState();
 }
 
-enum _Step { capture, analysis, issue, release, done }
+enum _Step { capture, analysis, release, done }
 
 /// The board's 拍照流程 is all seven slots, in enum order: 加油卡/停車卡, both
 /// cabin rows, then the four body corners.
@@ -62,11 +65,6 @@ class _ReturnFlowScreenState extends State<ReturnFlowScreen> {
   Set<CaptureSpot> _taken = {};
   late Set<CaptureSpot> _pending = _allSpots.toSet();
   _Step _step = _Step.capture;
-
-  /// Once the driver has redone the flagged shot (or cleared the cabin), the
-  /// second pass through the analysis comes back clean. Scripted scenarios only
-  /// — in live mode the second pass is answered by L1 like the first one.
-  bool _resolved = false;
 
   /// Keyed so the viewfinder rebuilds from scratch on a retake — which is why
   /// the photos live out here and not in its state.
@@ -142,10 +140,8 @@ class _ReturnFlowScreenState extends State<ReturnFlowScreen> {
     super.dispose();
   }
 
-  ReturnAnalysis get _analysis {
-    if (_live) return _session.analysis;
-    return _resolved ? ReturnAnalysis.clear : _scenario.analysis;
-  }
+  ReturnAnalysis get _analysis =>
+      _live ? _session.analysis : _scenario.analysis;
 
   void _restart(ReturnScenario scenario) => setState(() {
     // A previous run's verdict must not land on top of the new one.
@@ -157,7 +153,6 @@ class _ReturnFlowScreenState extends State<ReturnFlowScreen> {
     _taken = {};
     _pending = _allSpots.toSet();
     _frames.clear();
-    _resolved = false;
     _step = _Step.capture;
     _captureRun++;
   });
@@ -196,23 +191,7 @@ class _ReturnFlowScreenState extends State<ReturnFlowScreen> {
     // costs the driver the verdict — the return itself still completes, and
     // 訂單明細 carries the same copy whenever they go looking for it.
     unawaited(ReturnNotifications.instance.requestPermission());
-    setState(() {
-      _step = _analysis.issue == null ? _Step.release : _Step.issue;
-    });
-  }
-
-  void _retake(ReturnIssue issue) {
-    // The flagged slot goes back to empty so the strip stops showing the
-    // rejected frame's verdict beside the replacement.
-    if (_live) _session.clear(issue.retakeSpot);
-    _frames.remove(issue.retakeSpot);
-    setState(() {
-      _taken = {..._taken}..remove(issue.retakeSpot);
-      _pending = {issue.retakeSpot};
-      _resolved = true;
-      _step = _Step.capture;
-      _captureRun++;
-    });
+    setState(() => _step = _Step.release);
   }
 
   /// 回到主頁 — drop back to the map, then let the follow-up pushes land.
@@ -295,7 +274,7 @@ class _ReturnFlowScreenState extends State<ReturnFlowScreen> {
       // same string every L1 upload is keyed by, so there is one answer to
       // "which car is this" and the viewfinder and the backend share it.
       expectedPlate: _carNo,
-      startMisaligned: _scenario.startsMisaligned && !_resolved,
+      startMisaligned: _scenario.startsMisaligned,
       onFinished: () => setState(() {
         _taken = {..._taken, ..._pending};
         _step = _Step.analysis;
@@ -308,11 +287,6 @@ class _ReturnFlowScreenState extends State<ReturnFlowScreen> {
       analysis: _analysis,
       session: _live ? _session : null,
       onContinue: _afterAnalysis,
-    ),
-    _Step.issue => ReturnIssueScreen(
-      issue: _analysis.issue!,
-      onRetake: () => _retake(_analysis.issue!),
-      onSkip: () => setState(() => _step = _Step.release),
     ),
     _Step.release => ReturnReleaseScreen(
       onFinish: () => setState(() => _step = _Step.done),

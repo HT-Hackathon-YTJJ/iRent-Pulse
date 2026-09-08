@@ -27,17 +27,19 @@ viewfinder. Four different things come out of each one:
       any layout of their own.
 
 Usage:
-    python3 tool/gen_slot_assets.py              # fetch the sources over HTTPS
-    python3 tool/gen_slot_assets.py --src DIR    # use a local checkout instead
+    python3 tool/gen_slot_assets.py              # use tool/slot_paint/
+    python3 tool/gen_slot_assets.py --src DIR    # use another directory
+    python3 tool/gen_slot_assets.py --fetch      # fetch the 72px originals
 
 Needs Pillow and numpy. `api/.venv` already has both:
     api/.venv/bin/python tool/gen_slot_assets.py
 
-**On resolution.** Everything upstream of this script is 72x72 — the design
-repo, and the image fills inside the Figma board itself (node 843:900 exports
-at 55x37 native). There is no higher-resolution original to reach for, so the
-quality here is won by *how* the 72px source is enlarged, not by finding a
-bigger one:
+**On resolution.** 2026-09-08: `tool/slot_paint/` now holds 1440x1440 masters
+for all seven slots, so this is no longer an enlargement — the guide is a 1.4x
+upscale of real artwork and the strip tile a downscale of it. The 72x72
+originals in the design repo (and the 55x37 image fills in the Figma board,
+node 843:900) are still what `--src ""` fetches, and the enlargement machinery
+below is what makes *those* survive:
 
 * the alpha is enlarged as a smooth field and then re-thresholded with a narrow
   ramp, which is what an SDF glyph renderer does — the curve comes out clean
@@ -47,9 +49,9 @@ bigger one:
 * the colour art gets Lanczos plus an unsharp pass, and is then drawn at ~40%
   opacity, where softness reads as "ghost image" rather than as "bad asset".
 
-If genuinely sharp artwork turns up later (a 4x export of the car renders, or
-SVG paths), drop it in as ``slot_paint_<key>@4x.png`` beside the sources and
-this script will prefer it — see ``load()``.
+None of it hurts a master that is already sharp: at 1.4x the re-threshold is a
+no-op on a clean edge, and the unsharp radius scales with the ratio, so it all
+but switches itself off.
 """
 
 from __future__ import annotations
@@ -78,6 +80,15 @@ SLOTS = [
     "left_back",
 ]
 
+# Slots that get the three guide layers as well as a strip tile.
+#
+# Only the four body corners. The two cabin rows draw no guide at all — there
+# is no repeatable angle to ask for a hand's width from a seat back — and
+# 加油卡/停車卡 draws its pouch frame in code (`_CardPouchPainter`), because
+# what it is asking for is a *layout*, not a particular pouch. Emitting the
+# other three anyway put 1.6 MB of artwork nothing loads into the bundle.
+GUIDED = {"right_front", "left_front", "right_back", "left_back"}
+
 # Slot key -> source file name.
 #
 # The design repo's four body renders are named for the mirror of the angle
@@ -105,6 +116,12 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 SLOT_DIR = ROOT / "assets/images/return/slots"
 GUIDE_DIR = ROOT / "assets/images/return/guide"
 
+# The 1440x1440 masters 學姐 delivered (2026-09-08), kept out of `assets/` so
+# they are not bundled into the app. Lossless WebP: they are flat-shaded
+# renders on transparency, which is the case lossless WebP is good at, and it
+# halves them without touching a pixel.
+DEFAULT_SRC = ROOT / "tool/slot_paint"
+
 # How wide the blown-up guide is before it is written out. The guide is drawn
 # up to ~390pt wide on a 3x display, so 2048 keeps a comfortable margin over
 # the ~1170 physical pixels it can occupy.
@@ -125,16 +142,24 @@ EDGE_KERNEL = 9
 
 # The colour art is drawn semi-transparent, so it does not need the guide's
 # full resolution; half of it keeps the bundle small and still resolves every
-# feature the 72px source has.
+# feature the source has.
 ART_WIDTH = GUIDE_WIDTH // 2
+
+# The strip tile is 72pt square. 288 is 4x that — one step past the 3.125x of
+# the densest screen this runs on, and the point where a 1440px master stops
+# being visibly softened by the downscale. Saving the master through untouched
+# would put ~4 MB of artwork in the bundle to fill 72pt.
+TILE_WIDTH = 288
 
 
 def load(name: str, src: pathlib.Path | None) -> Image.Image:
-    """The source render for one slot, preferring an `@4x` file if one exists."""
+    """The source render for one slot, biggest local file first."""
     if src is not None:
-        hi = src / f"slot_paint_{name}@4x.png"
-        path = hi if hi.exists() else src / f"slot_paint_{name}.png"
-        return Image.open(path).convert("RGBA")
+        for suffix in ("@4x.png", ".webp", ".png"):
+            path = src / f"slot_paint_{name}{suffix}"
+            if path.exists():
+                return Image.open(path).convert("RGBA")
+        raise FileNotFoundError(f"no slot_paint_{name}.* under {src}")
     url = f"{SOURCE_URL}/slot_paint_{name}.png"
     with urllib.request.urlopen(url) as response:  # noqa: S310 - fixed host
         return Image.open(io.BytesIO(response.read())).convert("RGBA")
@@ -156,6 +181,19 @@ def outline(alpha: Image.Image) -> Image.Image:
     # The blur costs the band its peak; this puts the middle of the stroke back
     # to solid and leaves the falloff on either side.
     return band.point(lambda v: min(255, round(v * 1.9)))
+
+
+def tile(icon: Image.Image) -> Image.Image:
+    """The strip indicator: the master, square, at [TILE_WIDTH].
+
+    Framing is left exactly as the master has it — the tile draws with
+    `BoxFit.contain` inside a square, so cropping to the silhouette here would
+    zoom every slot by a different amount and break the strip's rhythm.
+    """
+    if icon.width <= TILE_WIDTH:
+        return icon
+    height = max(1, round(icon.height * TILE_WIDTH / icon.width))
+    return icon.resize((TILE_WIDTH, height), Image.LANCZOS)
 
 
 def crop_box(icon: Image.Image) -> tuple[int, int, int, int]:
@@ -219,9 +257,17 @@ def main() -> None:
     parser.add_argument(
         "--src",
         type=pathlib.Path,
-        help="directory holding slot_paint_*.png instead of fetching them",
+        default=DEFAULT_SRC,
+        help="directory holding the slot_paint_* masters",
+    )
+    parser.add_argument(
+        "--fetch",
+        action="store_true",
+        help="ignore --src and pull the design repo's 72px originals over HTTPS",
     )
     args = parser.parse_args()
+    if args.fetch:
+        args.src = None
 
     SLOT_DIR.mkdir(parents=True, exist_ok=True)
     GUIDE_DIR.mkdir(parents=True, exist_ok=True)
@@ -230,9 +276,13 @@ def main() -> None:
     for key in SLOTS:
         source = SOURCES[key]
         icon = load(source, args.src)
-        icon.save(SLOT_DIR / f"{key}.png")
+        tile(icon).save(SLOT_DIR / f"{key}.png")
 
         box = crop_box(icon)
+        if key not in GUIDED:
+            print(f"{key:<15} {source:<15} {'(tile only)':<15}")
+            continue
+
         alpha = guide_mask(icon, box)
         white(alpha).save(GUIDE_DIR / f"{key}.png")
         white(outline(alpha)).save(GUIDE_DIR / f"{key}_edge.png")

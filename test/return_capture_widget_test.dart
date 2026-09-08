@@ -145,6 +145,65 @@ void main() {
     expect(find.text('加油卡/停車卡'), findsOneWidget);
   });
 
+  testWidgets('the strip walks end to end on a real phone-width screen', (
+    tester,
+  ) async {
+    // **This is the whole point of the test.** The seven tiles are 552pt of
+    // rail and the default 800x600 test surface holds all of it at once, which
+    // is why the two tests above passed while 加油卡 and 左後 were untappable on
+    // the handset. At 346pt the rail has to slide under the clip, and it was
+    // the slide that was eating the taps: the hit test was run against the
+    // un-slid position, so a tile drawn in the middle of the screen was being
+    // asked for at an offset outside it.
+    //
+    // Pixel 10 Pro with the user's display size turned up: 1080x2410 physical
+    // at 3.125, i.e. 345.6 x 771.2 logical.
+    tester.view.physicalSize = const Size(1080, 2410);
+    tester.view.devicePixelRatio = 3.125;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await open(tester, onFinished: () {});
+
+    final centre = tester.view.physicalSize.width / tester.view.devicePixelRatio / 2;
+
+    Future<void> hop(CaptureSpot spot) async {
+      await tester.tap(
+        find
+            .ancestor(
+              of: slotIcon(spot),
+              matching: find.byType(GestureDetector),
+            )
+            .first,
+      );
+      // Two pumps, not one: the first rebuilds with the new selection, which is
+      // when TweenAnimationBuilder is handed the new `end` and *starts* the
+      // 320ms slide. Only the second one can run it to completion.
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      // The selected tile is the one the rail centres, so where it ended up is
+      // the assertion that the tap was received — and it does not need the
+      // header, which the four corners all share.
+      expect(
+        tester.getCenter(slotIcon(spot)).dx,
+        closeTo(centre, 1),
+        reason: '點 ${spot.label} 沒有切過去',
+      );
+    }
+
+    // Forward to the far end and back, one tile at a time — the neighbour of
+    // the centred tile is always the next thing on screen, so this is the walk
+    // a driver actually does. 左後 at one end and 加油卡 at the other are the
+    // two that did nothing at all.
+    const spots = CaptureSpot.values;
+    for (final spot in spots.skip(1)) {
+      await hop(spot);
+    }
+    for (final spot in spots.reversed.skip(1)) {
+      await hop(spot);
+    }
+  });
+
   testWidgets('an off-target shutter offers 仍要送出 rather than blocking', (
     tester,
   ) async {

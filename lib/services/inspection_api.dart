@@ -257,6 +257,8 @@ class L1Photo {
     this.angleMismatch = false,
     this.cleanliness,
     this.items = const [],
+    this.parkingCardPresent,
+    this.fuelCardPresent,
     this.damageCount = 0,
     this.maxSeverity = 'none',
     this.qualityForced = false,
@@ -277,6 +279,12 @@ class L1Photo {
   final bool angleMismatch;
   final String? cleanliness;
   final List<String> items;
+
+  /// 加油卡/停車卡 only. Null means that pocket's state could not be read —
+  /// which is not the same as empty, and is not the driver's problem to fix.
+  final bool? parkingCardPresent;
+  final bool? fuelCardPresent;
+
   final int damageCount;
   final String maxSeverity;
   final bool qualityForced;
@@ -303,6 +311,8 @@ class L1Photo {
       items: (json['items'] as List<Object?>? ?? const [])
           .map((e) => e.toString())
           .toList(),
+      parkingCardPresent: json['parking_card_present'] as bool?,
+      fuelCardPresent: json['fuel_card_present'] as bool?,
       damageCount: damages?.length ?? 0,
       maxSeverity: json['max_severity'] as String? ?? 'none',
       qualityForced: json['quality_forced'] as bool? ?? false,

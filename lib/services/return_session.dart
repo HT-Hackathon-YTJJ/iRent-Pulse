@@ -216,10 +216,13 @@ class ReturnSession extends ChangeNotifier {
 
   /// Build the 還車分析 page out of real answers.
   ///
-  /// Two things are reported and no more: whether the photos can be read, and
+  /// Two bars are reported and no more: whether the photos can be read, and
   /// whether the cabin is clean. Damage never appears here even when L1 already
   /// found it — the finding exists while the driver is still standing there,
   /// and withholding it is a deliberate product decision, not a technical one.
+  ///
+  /// Everything the page *does* report, it reports in full: [ReturnAnalysis
+  /// .findings] is every problem, not the first or the worst.
   ReturnAnalysis get analysis {
     final answered = _slots.entries
         .where((e) => e.value.result != null)
@@ -241,9 +244,11 @@ class ReturnSession extends ChangeNotifier {
         : AnalysisCheck(
             title: '照片可判讀性',
             pendingLabel: '正在處理中',
-            resultLabel:
-                '${unreadable.first.key.label}照片'
-                '${unreadable.first.value.result?.assessableReason ?? '無法判讀'}，需重拍',
+            // Names the slots and stops. The reason for each one is on its own
+            // card below, where it has room to be a sentence; repeating the
+            // first one's reason up here made the line as long as the reasons
+            // and still only covered one of them.
+            resultLabel: '${_listOf(unreadable.map((e) => e.key.label))}不通過',
             ok: false,
             ratio: answered.isEmpty ? 0 : readable / answered.length,
           );
@@ -254,7 +259,8 @@ class ReturnSession extends ChangeNotifier {
         ? AnalysisCheck(
             title: '車內整潔度',
             pendingLabel: '正在處理中',
-            resultLabel: '${CaptureSpot.interiorRear.label}：${cabin!.items.join('、')}',
+            resultLabel:
+                '${CaptureSpot.interiorRear.label}：${cabin!.items.join('、')}',
             ok: false,
             ratio: 0.78,
           )
@@ -268,44 +274,83 @@ class ReturnSession extends ChangeNotifier {
     return ReturnAnalysis(
       photo: photoCheck,
       cabin: cabinCheck,
-      issue: _issue(dirty, cabin, unreadable),
+      findings: _findings(),
     );
   }
 
-  /// 髒汙 outranks a retake, matching L3's rule order: dirt lands on the next
-  /// driver in half an hour, an unreadable frame only costs a review.
-  ReturnIssue? _issue(
-    bool dirty,
-    L1Photo? cabin,
-    List<MapEntry<CaptureSpot, SlotStatus>> unreadable,
-  ) {
-    if (dirty) {
-      final items = cabin!.items.isEmpty ? '垃圾' : cabin.items.join('、');
-      return ReturnIssue(
-        icon: 'assets/images/return/icon_trash.svg',
-        title: '車內偵測到垃圾',
-        emphasis: CaptureSpot.interiorRear.label,
-        body: '偵測到$items，請將垃圾帶走後再完成還車。',
-        note: '順手帶走垃圾，維持你的優良駕駛等級；若未清理，可能會影響信用分數',
-        primaryLabel: '我已清理，重拍車內照',
-        secondaryLabel: '仍要還車',
-        retakeSpot: CaptureSpot.interiorRear,
-      );
+  /// `[後座, 右後]` → `後座和右後`; three or more get 、 and a final 和.
+  static String _listOf(Iterable<String> names) {
+    final list = names.toList();
+    if (list.length <= 1) return list.join();
+    return '${list.sublist(0, list.length - 1).join('、')}和${list.last}';
+  }
+
+  /// Every problem this return has, in strip order.
+  ///
+  /// Three kinds, and they are genuinely different questions rather than
+  /// severities of one: a frame nobody can read, a cabin with rubbish in it,
+  /// and a card that left the car in somebody's pocket. Ordering them by slot
+  /// rather than by importance is deliberate — the driver is going to walk
+  /// back to the car and deal with them in the order they are standing in.
+  List<ReturnFinding> _findings() {
+    final out = <ReturnFinding>[];
+    for (final spot in CaptureSpot.values) {
+      final status = statusOf(spot);
+      final result = status.result;
+      if (result == null) continue;
+
+      if (status.phase == SlotPhase.retake) {
+        out.add(
+          ReturnFinding(
+            title: '${spot.label}不通過',
+            reason: [
+              result.assessableReason ?? '照片無法判讀',
+              result.retakeHint,
+            ].whereType<String>().join('。'),
+            spot: spot,
+            photo: status.file,
+          ),
+        );
+        continue;
+      }
+
+      if (spot == CaptureSpot.fuelCard) {
+        // Null is "that pocket could not be seen", which is not the same as
+        // empty and is not the driver's problem to fix.
+        final missing = <String>[
+          if (result.parkingCardPresent == false) '停車卡',
+          if (result.fuelCardPresent == false) '加油卡',
+        ];
+        if (missing.isNotEmpty) {
+          out.add(
+            ReturnFinding(
+              title: '${missing.join('、')}不在車上',
+              reason:
+                  '遮陽板的卡套裡沒有看到${missing.join('與')}。'
+                  '請確認是否還在身上，放回卡套後再完成還車。',
+              spot: spot,
+              photo: status.file,
+            ),
+          );
+        }
+        continue;
+      }
+
+      if (result.cleanliness == '髒汙') {
+        final items = result.items.isEmpty ? '垃圾' : result.items.join('、');
+        out.add(
+          ReturnFinding(
+            title: '${spot.label}有垃圾',
+            reason:
+                '偵測到$items。請將垃圾帶走後再完成還車，'
+                '順手帶走可維持你的優良駕駛等級。',
+            spot: spot,
+            photo: status.file,
+          ),
+        );
+      }
     }
-    if (unreadable.isEmpty) return null;
-    final first = unreadable.first;
-    final result = first.value.result!;
-    return ReturnIssue(
-      icon: 'assets/images/return/icon_lightness.svg',
-      title: '有一張照片需要重拍',
-      emphasis: first.key.label,
-      body: '${result.assessableReason ?? '照片無法判讀'}。'
-          '${result.retakeHint ?? '請補拍一張。'}',
-      note: '只需重拍這一張，\n其他 ${_slots.values.where((s) => s.phase == SlotPhase.passed).length} 張已通過確認。',
-      primaryLabel: '重拍照片',
-      secondaryLabel: '仍要還車',
-      retakeSpot: first.key,
-    );
+    return out;
   }
 
   /// L2 + L3. Deliberately not awaited by the UI — the driver has left.

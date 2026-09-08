@@ -110,3 +110,11 @@ test/**/failures/
 
 # 由 tool/gen_map_key.sh 從 .env 產生的本機金鑰
 lib/config/map_key.dart
+
+# Demo 素材原檔。demo/return_photos/ 裡的照片以 WebP（q95，PSNR ~43 dB）
+# 進版控，原始 PNG/JPEG 留在本機——17 MB 對一個 repo 太重，而且 L1 上傳前
+# 本來就會被 openrouter.encode_image 縮到長邊 1024 再轉 JPEG q85，原檔的
+# 位元一格也到不了模型面前。
+demo/return_photos/*.png
+demo/return_photos/*.jpg
+demo/return_photos/*.jpeg

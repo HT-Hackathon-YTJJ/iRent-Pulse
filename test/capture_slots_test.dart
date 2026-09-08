@@ -73,21 +73,61 @@ void main() {
     }
   });
 
-  test('every slot has all three guide layers on disk', () async {
+  test('every slot has its strip tile, and only the corners have guides', () async {
     TestWidgetsFlutterBinding.ensureInitialized();
+
+    Future<int> size(String asset) =>
+        rootBundle.load(asset).then((d) => d.lengthInBytes);
+
     for (final spot in CaptureSpot.values) {
+      expect(
+        await size(spot.slotIcon),
+        greaterThan(0),
+        reason: '${spot.slotIcon} 不在 bundle 裡（跑 tool/gen_slot_assets.py）',
+      );
+    }
+
+    for (final spot in body) {
       for (final asset in [
-        spot.slotIcon,
         spot.guideAsset,
         spot.guideArtAsset,
         spot.guideEdgeAsset,
       ]) {
         expect(
-          await rootBundle.load(asset).then((d) => d.lengthInBytes),
+          await size(asset),
           greaterThan(0),
           reason: '$asset 不在 bundle 裡（跑 tool/gen_slot_assets.py）',
         );
       }
+    }
+
+    // And the other three are *not* shipped. The cabin rows draw nothing and
+    // 加油卡/停車卡 draws its pouch in code, so three slots' worth of guide
+    // artwork would be 1.6 MB of bundle nothing ever loads.
+    for (final spot in CaptureSpot.values.where((s) => !s.isCorner)) {
+      var shipped = true;
+      try {
+        await size(spot.guideAsset);
+      } catch (_) {
+        shipped = false;
+      }
+      expect(shipped, isFalse, reason: '${spot.guideAsset} 不該還在 bundle 裡');
+    }
+  });
+
+  test('the guide style matches what each slot can actually be aimed at', () {
+    expect(CaptureSpot.fuelCard.guide, GuideStyle.cardPouch);
+    for (final spot in [CaptureSpot.interiorFront, CaptureSpot.interiorRear]) {
+      expect(spot.guide, GuideStyle.none, reason: '${spot.label} 不該畫輪廓線');
+    }
+    for (final spot in body) {
+      expect(spot.guide, GuideStyle.silhouette);
+    }
+
+    // The three interior slots are shot indoors, close up, in whatever light
+    // the roof lining leaves. The corner thresholds are unreachable in there.
+    for (final spot in CaptureSpot.values) {
+      expect(spot.aimSlack, spot.isCorner ? 0 : greaterThan(0));
     }
   });
 

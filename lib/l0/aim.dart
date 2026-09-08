@@ -231,6 +231,17 @@ class AimEvaluator {
   /// check is off for those slots — being cut off *is* the instruction.
   bool guideAllowsEdge;
 
+  /// A standing loosening of [base], 0…1, set per slot.
+  ///
+  /// 加油卡/停車卡 runs at 0.35. The four corners are shot at arm's length in
+  /// daylight against a whole car; the 遮陽板 is a close-up of a dark surface
+  /// under a roof, inside a car, often with the driver's own shadow across it.
+  /// The blur floor and the exposure ceilings that are right for the first
+  /// case simply are not reachable in the second, and a slot that can never go
+  /// green is a slot the driver fights until they give up — the one failure
+  /// mode L0 is not allowed to have.
+  double slack = 0;
+
   DateTime? _openedAt;
   int _streak = 0;
 
@@ -318,7 +329,11 @@ class AimEvaluator {
     final elapsed = _elapsed;
     final relaxed = elapsed >= relaxAfter;
     final manualOffered = elapsed >= manualAfter;
-    var t = relaxed ? base.relaxedBy(0.2) : base;
+    // [slack] first, then the elapsed widening on top of it: a slot that is
+    // born lenient still earns the same extra room for a driver who is
+    // struggling, rather than having its own allowance quietly capped.
+    var t = slack > 0 ? base.relaxedBy(slack) : base;
+    if (relaxed) t = t.relaxedBy(0.2);
     // Hysteresis: a frame that has already locked is held to a looser standard
     // than one trying to lock, so a breath in or out does not drop the shutter
     // out from under a driver who is already still.
@@ -360,11 +375,11 @@ class AimEvaluator {
     // exposure check was answering first, so a driver standing at somebody
     // else's car was being told 「光線不足」 and sent looking for a light.
     //
-    // Only the corner slots reach here — the cabin rows and the sun visor have
-    // no plate in shot, and [PlateWatcher] holds a confirmed match across them.
-    // A frame too dark to read is not a mismatch either: the recogniser returns
-    // nothing, the watcher stays [PlateMatch.unknown], and the exposure hint
-    // below gets its turn as before.
+    // Only the corner slots reach here — the cabin rows and the 遮陽板 shot
+    // have no plate in shot, and [PlateWatcher] holds a confirmed match across
+    // them. A frame too dark to read is not a mismatch either: the recogniser
+    // returns nothing, the watcher stays [PlateMatch.unknown], and the
+    // exposure hint below gets its turn as before.
     if (requireGuide && plate == PlateMatch.mismatch) {
       return fail(AimState.wrongCar, AimState.wrongCar.hint!);
     }

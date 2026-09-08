@@ -55,6 +55,17 @@ L2_MODEL = env("L2_MODEL", "anthropic/claude-opus-5")
 REQUEST_TIMEOUT_S = float(env("VLM_TIMEOUT_S", "60"))
 MAX_ATTEMPTS = int(env("VLM_MAX_ATTEMPTS", "3"))
 
+# Determinism knobs. `temperature=0` alone does not make OpenRouter reproducible:
+# it load-balances across providers, and two providers serving "the same" model
+# are serving different quantisations of it. Pinning the provider is the larger
+# half of the fix and the seed is the smaller one — a request whose provider
+# moved would have been a different model, seed or no seed.
+#
+# Empty disables the pin (the routing goes back to OpenRouter's default), which
+# is what you want if the named provider is down mid-demo.
+L1_PROVIDER = env("L1_PROVIDER", "google-vertex")
+VLM_SEED = int(env("VLM_SEED", "20260908"))
+
 # Photos are downscaled before they reach a VLM: image tokens dominate cost and
 # a 1024px long edge is well past what any of these checks resolve.
 MAX_IMAGE_EDGE = int(env("MAX_IMAGE_EDGE", "1024"))

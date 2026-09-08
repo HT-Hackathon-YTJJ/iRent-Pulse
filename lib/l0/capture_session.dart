@@ -289,9 +289,11 @@ class CaptureSession extends ChangeNotifier {
     required Rect? guideRect,
     required bool requireGuide,
     bool guideAllowsEdge = false,
+    double slack = 0,
   }) {
     _evaluator.guideRect = guideRect;
     _evaluator.guideAllowsEdge = guideAllowsEdge;
+    _evaluator.slack = slack;
     _requireGuide = requireGuide;
   }
 
@@ -379,8 +381,8 @@ class CaptureSession extends ChangeNotifier {
   /// megabyte of work in the frame loop.
   void _maybeReadPlate(FramePixels pixels, DateTime now) {
     final reader = _plateReader;
-    // Only the four corner slots — the cabin rows and the sun visor have no
-    // plate in shot, and _requireGuide is exactly "this slot is a body corner".
+    // Only the four corner slots — the cabin rows and the 遮陽板 have no plate
+    // in shot, and _requireGuide is exactly "this slot is a body corner".
     if (reader == null || reader.busy || !_requireGuide) return;
     if (now.difference(_lastPlateRead) < _plateInterval) return;
 

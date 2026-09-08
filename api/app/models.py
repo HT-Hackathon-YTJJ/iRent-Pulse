@@ -17,6 +17,24 @@ class Stage(str, Enum):
     ret = "return"
 
 
+class SlotKind(str, Enum):
+    """Which of L1's three questions a slot is asking.
+
+    Not derivable from the photo — it is a property of the shot list, decided
+    before the shutter fires, so it is passed in rather than guessed at.
+    """
+
+    exterior = "exterior"
+    interior = "interior"
+    #: 加油卡/停車卡 — the sun-visor close-up. It used to fall through to
+    #: `exterior` for want of anywhere else to put it, which sent a photograph
+    #: of a plastic card into a prompt whose first question is whether the
+    #: car's paintwork is legible. The answer was reliably "根本沒有拍到車",
+    #: i.e. `assessable=false`, i.e. a retake demand the driver could never
+    #: satisfy.
+    card = "card"
+
+
 class Severity(str, Enum):
     none = "none"
     minor = "minor"
@@ -131,6 +149,19 @@ class L1Result(BaseModel):
     cleanliness: Optional[str] = None
     cleanliness_conf: Optional[float] = None
     items: Optional[List[str]] = None
+
+    # 加油卡/停車卡 frames only.
+    #
+    # The pouch is not a panel and not a cabin. The only question worth asking
+    # about it is whether the two cards are still in it — the driver is being
+    # asked to photograph the visor precisely so that a card carried off in
+    # somebody's pocket is caught while they are still standing at the car.
+    #
+    # Two fields, not one: the pockets are independent and one of the two being
+    # empty is the common case, not a degenerate one. None means that pocket's
+    # state could not be read, which is different from it being empty.
+    parking_card_present: Optional[bool] = None
+    fuel_card_present: Optional[bool] = None
 
     quality_forced: bool = False
     retake_count: int = 0

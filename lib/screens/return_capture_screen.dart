@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io' show File;
 import 'dart:math' as math;
+import 'dart:ui' show lerpDouble;
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
@@ -103,6 +104,15 @@ class ReturnCaptureScreen extends StatefulWidget {
 const double _stripBottom = 175;
 const double _stripSize = 72;
 const double _stripGap = 8;
+
+/// Decode width for a captured frame drawn into a 72pt strip tile — 512 covers
+/// the square tile on a 3x screen whichever way round the photo is (a 16:9
+/// landscape still lands 288 tall against the 225 the tile needs).
+const int _tileDecodeWidth = 512;
+
+/// Decode width for the held frame laid over the preview. Wider than any phone
+/// this runs on, and a fifth of the full-size decode it replaces.
+const int _heldDecodeWidth = 1440;
 const double _tileRadius = 10.48;
 const double _shutterSize = 77.255;
 
@@ -134,7 +144,7 @@ const double _guideBandTop = 76;
 const double _guideBandBottom = _stripBottom + _stripSize + 28;
 
 class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   late final Set<CaptureSpot> _taken = {...widget.taken};
   late final Set<CaptureSpot> _pending = {...widget.pending};
   late CaptureSpot _current = _firstPending;
@@ -186,6 +196,21 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
     duration: const Duration(milliseconds: 260),
   );
 
+  /// 收進格子 — the frame that was just taken, on its way to its tile.
+  ///
+  /// Between the shutter and the slot there was nothing: the photo simply was
+  /// not on screen one frame and was a 72pt thumbnail the next, four slots
+  /// along, while the strip also slid. Two things moved at once and neither
+  /// explained the other. Flying the frame into the tile it landed in is the
+  /// sentence "this photo went there", and it costs 420ms of a flow whose next
+  /// step is the driver walking to the far corner of the car.
+  CapturedShot? _flying;
+
+  late final AnimationController _flight = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 420),
+  );
+
   CaptureSpot get _firstPending => widget.spots.firstWhere(
     _pending.contains,
     orElse: () => widget.spots.first,
@@ -229,6 +254,7 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
     _camera.dispose();
     _simulator.dispose();
     _shutterFlash.dispose();
+    _flight.dispose();
     super.dispose();
   }
 
@@ -285,12 +311,18 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
     if (!mounted) return;
 
     _shutterFlash.forward(from: 0);
-    _capturing = false;
 
     if (verdict.isAcceptable) {
+      // The shutter stays shut for the flight. It is a fifth of a second of a
+      // press the driver has already made, and letting a second one through
+      // mid-flight would file two photos into one slot.
+      await _flyIntoSlot(shot);
+      if (!mounted) return;
+      _capturing = false;
       _commit(shot);
       return;
     }
+    _capturing = false;
 
     // Held, not filed. The frame stays on screen under the panel so 重拍 and
     // 仍要送出 are answered about a photo the driver can actually see.
@@ -301,6 +333,31 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
     });
   }
 
+  /// Play the frame into its tile. Returns once it has landed.
+  ///
+  /// Nothing to fly when there was no camera behind the press — the scripted
+  /// fallback files a stand-in and the strip fills instantly, which is honest:
+  /// no photo was taken, so none is shown travelling.
+  Future<void> _flyIntoSlot(CapturedShot? shot) async {
+    if (shot == null) return;
+    setState(() => _flying = shot);
+    await _flight.forward(from: 0);
+  }
+
+  /// Where the tile of the slot being shot sits, in screen coordinates.
+  ///
+  /// Computed rather than read off a `GlobalKey`: the strip always centres the
+  /// active slot, and the slot being shot *is* the active one until [_commit]
+  /// moves on. So the target is the middle of the rail, and it is known before
+  /// the tile has been laid out — which is what lets the flight start on the
+  /// same frame as the shutter flash instead of one after it.
+  Rect _slotRect(Size screen) => Rect.fromLTWH(
+    (screen.width - _stripSize) / 2,
+    screen.height - _stripBottom - _stripSize,
+    _stripSize,
+    _stripSize,
+  );
+
   /// File [shot] against the current slot and open the next one.
   void _commit(CapturedShot? shot) {
     final spot = _current;
@@ -309,6 +366,9 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
       _reviewing = false;
       _held = null;
       _heldVerdict = null;
+      // Cleared in the same frame the tile is filled, so the flying copy is
+      // replaced by the real one rather than blinking out before it.
+      _flying = null;
       _pending.remove(spot);
       _taken.add(spot);
       if (shot != null) _frames[spot] = shot.file;
@@ -484,6 +544,7 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
         guideRect: _guideInFrame(preview, spot),
         requireGuide: spot.isCorner,
         guideAllowsEdge: spot.guideBleed != 0,
+        slack: spot.aimSlack,
       );
     }
 
@@ -510,6 +571,7 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
                 held.file,
                 fit: BoxFit.cover,
                 gaplessPlayback: true,
+                cacheWidth: _heldDecodeWidth,
               ),
             ),
 
@@ -517,10 +579,16 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
           // instead of disappearing — 灰 → 黃 → 綠 is the readout the driver is
           // steering by, and taking it away the moment it starts working leaves
           // them nothing to hold the frame against.
-          Positioned.fromRect(
-            rect: _guideRect(preview, spot),
-            child: _AimGuide(spot: spot, state: verdict.state),
-          ),
+          //
+          // The two cabin rows draw nothing at all: there is no repeatable
+          // angle to ask for a hand's width from a seat back, so an outline
+          // there is a shape nobody can match and the only thing it manages to
+          // say is that they have failed to match it.
+          if (spot.guide != GuideStyle.none)
+            Positioned.fromRect(
+              rect: _guideRect(preview, spot),
+              child: _AimGuide(spot: spot, state: verdict.state),
+            ),
 
           const _Scrim(alignment: Alignment.topCenter, extent: 248),
           const _Scrim(alignment: Alignment.bottomCenter, extent: 272),
@@ -647,6 +715,38 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
               ),
             ),
           ),
+
+          // 收進格子. Above the strip so it lands *on* the tile rather than
+          // behind it, and below the flash so the two read as one action.
+          if (_flying != null)
+            AnimatedBuilder(
+              animation: _flight,
+              builder: (context, _) {
+                final t = Curves.easeInOutCubic.transform(_flight.value);
+                final rect = Rect.lerp(preview, _slotRect(media.size), t)!;
+                return Positioned.fromRect(
+                  rect: rect,
+                  child: IgnorePointer(
+                    child: Opacity(
+                      // Fades only at the very end, where the tile underneath
+                      // has already taken over the job of showing the photo.
+                      opacity: 1 - (t * t * t) * 0.4,
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(
+                          lerpDouble(0, _tileRadius, t)!,
+                        ),
+                        child: Image.file(
+                          _flying!.file,
+                          fit: BoxFit.cover,
+                          gaplessPlayback: true,
+                          cacheWidth: _heldDecodeWidth,
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
 
           // Shutter flash. Fully transparent at rest, so it is only ever
           // visible during the 260ms it is being played.
@@ -843,19 +943,36 @@ class _AimGuide extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return IgnorePointer(
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          _tinted(spot.guideAsset, state.guideColor, _guideFillOpacity),
-          // Untinted: the whole point of the render is that its own shading is
-          // what the driver matches the real car against.
-          Opacity(
-            opacity: _guideArtOpacity,
-            child: Image.asset(spot.guideArtAsset, fit: BoxFit.fill),
+      child: switch (spot.guide) {
+        GuideStyle.none => const SizedBox.shrink(),
+        GuideStyle.cardPouch => TweenAnimationBuilder<Color?>(
+          duration: const Duration(milliseconds: 240),
+          tween: ColorTween(end: state.guideEdgeColor),
+          builder: (context, color, _) => CustomPaint(
+            painter: _CardPouchPainter(
+              color: color ?? state.guideEdgeColor,
+              textDirection: Directionality.of(context),
+            ),
           ),
-          _tinted(spot.guideEdgeAsset, state.guideEdgeColor, _guideEdgeOpacity),
-        ],
-      ),
+        ),
+        GuideStyle.silhouette => Stack(
+          fit: StackFit.expand,
+          children: [
+            _tinted(spot.guideAsset, state.guideColor, _guideFillOpacity),
+            // Untinted: the whole point of the render is that its own shading
+            // is what the driver matches the real car against.
+            Opacity(
+              opacity: _guideArtOpacity,
+              child: Image.asset(spot.guideArtAsset, fit: BoxFit.fill),
+            ),
+            _tinted(
+              spot.guideEdgeAsset,
+              state.guideEdgeColor,
+              _guideEdgeOpacity,
+            ),
+          ],
+        ),
+      },
     );
   }
 
@@ -871,6 +988,105 @@ class _AimGuide extends StatelessWidget {
       ),
     );
   }
+}
+
+/// 加油卡/停車卡 — the 遮陽板 card holder, drawn rather than photographed.
+///
+/// The other six slots aim at a *thing*, and a render of that thing is the
+/// best instruction there is. This one aims at a **layout**: an iRent visor
+/// pouch is a branded centre panel with a card pocket either side, and what
+/// the driver has to get in frame is all three, the right way round. A render
+/// of one particular pouch would say far more than that and be wrong about
+/// most of it — the felt colour, the wear, which cards happen to be in it.
+///
+/// So it is three rounded rectangles and two labels. Vector code draws that
+/// crisply at any size, needs no asset, and says exactly the thing that is
+/// true of every car in the fleet.
+class _CardPouchPainter extends CustomPainter {
+  const _CardPouchPainter({required this.color, required this.textDirection});
+
+  final Color color;
+  final TextDirection textDirection;
+
+  /// Where the two pocket seams fall across the pouch, as fractions of its
+  /// width. Left pocket ~27%, branded centre ~45%, right pocket ~28% — the
+  /// proportions of the real thing.
+  static const double _leftSeam = 0.270;
+  static const double _rightSeam = 0.722;
+
+  static const double _dash = 7;
+  static const double _gap = 7;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final stroke = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeWidth = 2.4
+      ..color = color.withValues(alpha: 0.92);
+
+    final radius = Radius.circular(size.width * 0.035);
+    final outer = RRect.fromRectAndRadius(Offset.zero & size, radius);
+    _dashed(canvas, Path()..addRRect(outer), stroke);
+
+    // The seams stop short of the frame's own corners so the two lines read as
+    // dividers inside one pouch rather than as three separate boxes.
+    final inset = size.height * 0.04;
+    for (final x in [_leftSeam, _rightSeam]) {
+      _dashed(
+        canvas,
+        Path()
+          ..moveTo(size.width * x, inset)
+          ..lineTo(size.width * x, size.height - inset),
+        stroke,
+      );
+    }
+
+    _label(canvas, '停車卡', Offset(size.width * _leftSeam / 2, size.height / 2));
+    _label(
+      canvas,
+      '加油卡',
+      Offset(size.width * (_rightSeam + 1) / 2, size.height / 2),
+    );
+  }
+
+  /// Walk [path] and stroke only the on-segments.
+  void _dashed(Canvas canvas, Path path, Paint paint) {
+    for (final metric in path.computeMetrics()) {
+      var distance = 0.0;
+      while (distance < metric.length) {
+        final end = math.min(distance + _dash, metric.length);
+        canvas.drawPath(metric.extractPath(distance, end), paint);
+        distance = end + _gap;
+      }
+    }
+  }
+
+  void _label(Canvas canvas, String text, Offset centre) {
+    final painter = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(
+          fontSize: 15,
+          height: 1.2,
+          color: color.withValues(alpha: 0.95),
+          shadows: const [
+            // The pouch is dark, the roof lining above it is not; without this
+            // the labels vanish against whichever of the two they land on.
+            Shadow(color: Color(0x99000000), blurRadius: 4),
+          ],
+        ),
+      ),
+      textDirection: textDirection,
+    )..layout();
+    painter.paint(
+      canvas,
+      centre - Offset(painter.width / 2, painter.height / 2),
+    );
+  }
+
+  @override
+  bool shouldRepaint(_CardPouchPainter old) => old.color != color;
 }
 
 /// The shutter.
@@ -1097,34 +1313,53 @@ class _ShotStrip extends StatelessWidget {
     final shift =
         ((spots.length - 1) / 2 - index) * (_stripSize + _stripGap);
 
+    final rail = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (final spot in spots) ...[
+          _Tile(
+            spot: spot,
+            captured: taken.contains(spot),
+            active: spot == current,
+            frame: session?.statusOf(spot).file ?? frames[spot],
+            status: session?.statusOf(spot),
+            onTap: onSelect == null ? null : () => onSelect!(spot),
+          ),
+          if (spot != spots.last) const SizedBox(width: _stripGap),
+        ],
+      ],
+    );
+
+    // The slide is applied *inside* the OverflowBox, to the rail itself.
+    //
+    // It used to wrap the OverflowBox instead, and that is what made 加油卡 and
+    // 左後 — the two ends — untappable. A hit test entering a `Transform` is
+    // pushed through the inverse transform before it reaches the child, so a
+    // tap on a rail slid 240pt to the right arrived at the OverflowBox as a
+    // tap 240pt to the *left* of where it landed — outside the OverflowBox's
+    // own box, which is only ever screen-wide, so `RenderBox.hitTest`'s
+    // `size.contains` rejected it before the tiles were ever asked. The centre
+    // slots survived because their slide is small enough that the shifted
+    // point still falls inside the screen; the neighbours of the ends were
+    // half-tappable, which is the "有點 lag" — taps landing on the dead half of
+    // a tile and doing nothing.
+    //
+    // Inside the OverflowBox the transform wraps the rail, whose own box is
+    // the full 552pt of the seven tiles, so the shifted point stays within it
+    // and every tile is hit-tested at the position it is actually drawn.
     final strip = ClipRect(
       child: SizedBox(
         height: _stripSize,
-        child: TweenAnimationBuilder<double>(
-          tween: Tween<double>(end: shift),
-          duration: const Duration(milliseconds: 320),
-          curve: Curves.easeOutCubic,
-          builder: (context, dx, child) =>
-              Transform.translate(offset: Offset(dx, 0), child: child),
-          child: OverflowBox(
-            maxWidth: double.infinity,
-            alignment: Alignment.center,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                for (final spot in spots) ...[
-                  _Tile(
-                    spot: spot,
-                    captured: taken.contains(spot),
-                    active: spot == current,
-                    frame: session?.statusOf(spot).file ?? frames[spot],
-                    status: session?.statusOf(spot),
-                    onTap: onSelect == null ? null : () => onSelect!(spot),
-                  ),
-                  if (spot != spots.last) const SizedBox(width: _stripGap),
-                ],
-              ],
-            ),
+        child: OverflowBox(
+          maxWidth: double.infinity,
+          alignment: Alignment.center,
+          child: TweenAnimationBuilder<double>(
+            tween: Tween<double>(end: shift),
+            duration: const Duration(milliseconds: 320),
+            curve: Curves.easeOutCubic,
+            builder: (context, dx, child) =>
+                Transform.translate(offset: Offset(dx, 0), child: child),
+            child: rail,
           ),
         ),
       ),
@@ -1176,19 +1411,58 @@ class _Tile extends StatelessWidget {
       decoration: BoxDecoration(
         color: captured && file != null ? null : const Color(0x807C7F84),
         borderRadius: BorderRadius.circular(_tileRadius),
-        border: active ? Border.all(color: Colors.white, width: 2) : null,
       ),
+      // The ring goes in **foreground**Decoration, over the photo.
+      //
+      // As part of `decoration` it was painted behind the child, and a
+      // BoxDecoration with a border also insets the child by the stroke width
+      // — so the photo sat in a 68pt square while the clip was still the 72pt
+      // rounded rect. Along the straight edges that left the stroke showing;
+      // at the four corners the photo's square edge ran out past the stroke's
+      // curve and covered it. A ring with no corners reads as a rendering bug,
+      // which is what it was.
+      //
+      // Painting it in front also stops the tile's contents resizing by 2pt
+      // when it becomes the active one.
+      foregroundDecoration: active
+          ? BoxDecoration(
+              borderRadius: BorderRadius.circular(_tileRadius),
+              border: Border.all(color: Colors.white, width: 2),
+            )
+          : null,
       clipBehavior: Clip.antiAlias,
       child: Stack(
         fit: StackFit.expand,
         children: [
           if (file != null)
-            Image.file(file, fit: BoxFit.cover)
+            // cacheWidth, or the tile decodes the camera's full-size JPEG —
+            // ~4000x3000, 48 MB as ARGB — to fill 72pt. Seven of those do not
+            // fit in the 100 MB image cache together, so every strip rebuild
+            // evicted one and re-decoded another on the raster thread. That
+            // was the other half of the "點擊有點 lag": the taps registered,
+            // the frame they landed on took 200ms to draw.
+            Image.file(file, fit: BoxFit.cover, cacheWidth: _tileDecodeWidth)
           else if (captured)
             // No camera behind this run, so there is no real frame to show.
             Image.asset(spot.shotAsset, fit: BoxFit.cover)
           else
             Image.asset(spot.slotIcon, fit: BoxFit.contain),
+          // 需重拍 washes the whole tile amber rather than putting a button in
+          // the corner of it.
+          //
+          // The corner used to hold a ↻ that looked like the control for
+          // retaking — and was not one; the way back to a slot is tapping the
+          // tile, which is true of all seven and needs no affordance of its
+          // own. A button that is not a button in the one place the driver is
+          // being asked to look is worse than no button. The wash is legible
+          // from across the strip, marks the *photo* rather than a corner of
+          // it, and leaves the whole 72pt tile as the one thing to press.
+          if (status?.phase == SlotPhase.retake)
+            Positioned.fill(
+              child: ColoredBox(
+                color: AppColor.aimNear.withValues(alpha: 0.42),
+              ),
+            ),
           if (status != null && status!.phase != SlotPhase.empty)
             Positioned(right: 3, bottom: 3, child: _SlotBadge(phase: status!.phase)),
         ],
@@ -1207,7 +1481,12 @@ class _Tile extends StatelessWidget {
   }
 }
 
-/// ⏳ / ✓ / ✗ per slot — the whole point of reporting one photo at a time.
+/// ⏳ / ✓ / ! per slot — the whole point of reporting one photo at a time.
+///
+/// `failed` keeps its own grey ☁ and no amber wash. It does not mean the photo
+/// is bad, it means nobody managed to look at it — there is nothing for the
+/// driver to fix and marking it as if there were would send them back to
+/// re-shoot a frame that was fine.
 class _SlotBadge extends StatelessWidget {
   const _SlotBadge({required this.phase});
 
@@ -1230,7 +1509,7 @@ class _SlotBadge extends StatelessWidget {
       ),
       SlotPhase.retake => (
         AppColor.aimNear,
-        const Icon(Icons.refresh, size: 12, color: Colors.white),
+        const Icon(Icons.priority_high, size: 12, color: Colors.white),
       ),
       SlotPhase.failed => (
         AppColor.aimOff,

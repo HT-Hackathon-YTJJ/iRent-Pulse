@@ -12,7 +12,7 @@ again, while a false positive only costs one L2 call.
 from typing import Any, Dict, Optional
 
 from . import prompts
-from .models import L1Result, ObservedDamage, Severity, Stage
+from .models import L1Result, ObservedDamage, Severity, SlotKind, Stage
 from .openrouter import VlmError, chat_json, encode_image
 from . import config
 
@@ -33,7 +33,7 @@ async def screen(
     car_no: str,
     stage: Stage,
     slot: str,
-    interior: bool,
+    kind: SlotKind,
     l0: Optional[Dict[str, Any]] = None,
     retake_count: int = 0,
 ) -> L1Result:
@@ -54,7 +54,16 @@ async def screen(
         return base
 
     try:
-        if interior:
+        if kind is SlotKind.card:
+            parsed, meta = await chat_json(
+                model=config.L1_MODEL,
+                system=prompts.L1_CARD_SYSTEM,
+                user=prompts.L1_CARD_USER,
+                images=[("照片", data_url)],
+                schema=prompts.L1_CARD_SCHEMA,
+                schema_name="l1_card",
+            )
+        elif kind is SlotKind.interior:
             parsed, meta = await chat_json(
                 model=config.L1_MODEL,
                 system=prompts.L1_INTERIOR_SYSTEM,
@@ -96,7 +105,17 @@ async def screen(
             base.retake_required = True
             base.retake_hint = base.retake_hint or "請換一個角度避開光源，或退後一步"
 
-    if interior:
+    if kind is SlotKind.card:
+        base.parking_card_present = parsed.get("parking_card_present")
+        base.fuel_card_present = parsed.get("fuel_card_present")
+        if not base.assessable:
+            # Unreadable means unknown, the same as everywhere else here: a
+            # pocket nobody can see is not a pocket that is empty.
+            base.parking_card_present = None
+            base.fuel_card_present = None
+        return base
+
+    if kind is SlotKind.interior:
         base.cleanliness = parsed.get("cleanliness")
         base.cleanliness_conf = parsed.get("cleanliness_conf")
         base.items = parsed.get("items") or []

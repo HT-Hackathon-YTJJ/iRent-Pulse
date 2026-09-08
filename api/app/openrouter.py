@@ -87,7 +87,17 @@ async def chat_json(
             "json_schema": {"name": schema_name, "strict": True, "schema": schema},
         },
         "usage": {"include": True},
+        "seed": config.VLM_SEED,
     }
+    if config.L1_PROVIDER:
+        # `allow_fallbacks: false` is the point of this: without it OpenRouter
+        # silently reroutes when the pinned provider is busy, which is exactly
+        # the case where two runs of the same image disagree and nothing in the
+        # response says why. A hard failure is easier to see and retries above.
+        body["provider"] = {
+            "order": [config.L1_PROVIDER],
+            "allow_fallbacks": False,
+        }
     headers = {
         "Authorization": f"Bearer {config.OPENROUTER_API_KEY}",
         "Content-Type": "application/json",

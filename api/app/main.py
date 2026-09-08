@@ -27,7 +27,7 @@ from . import (
     l2 as l2_layer,
     l3 as l3_layer,
 )
-from .models import BoardNote, L1Result, L2Result, L3Decision, Stage
+from .models import BoardNote, L1Result, L2Result, L3Decision, SlotKind, Stage
 from .store import STORE
 
 app = FastAPI(
@@ -46,6 +46,24 @@ app.add_middleware(
 )
 
 INTERIOR_SLOTS = {"車內", "後座", "前座", "駕駛座", "副駕"}
+
+#: The sun-visor shot. Its own question — see `models.SlotKind.card`.
+CARD_SLOTS = {"加油卡/停車卡", "加油卡", "停車卡", "加油卡/停車證"}
+
+
+def slot_kind(slot: str) -> SlotKind:
+    """Which of L1's three prompts this slot's photo belongs in.
+
+    Driven off the `slot` string the app sends rather than anything in the
+    image: the shot list already knows what it asked for, and a model asked to
+    work out what it is looking at before answering the actual question is a
+    model given one more chance to be wrong.
+    """
+    if slot in CARD_SLOTS:
+        return SlotKind.card
+    if slot in INTERIOR_SLOTS:
+        return SlotKind.interior
+    return SlotKind.exterior
 
 
 @app.get("/", include_in_schema=False)
@@ -153,7 +171,7 @@ async def l1_screen(
         car_no=car_no,
         stage=stage_enum,
         slot=slot,
-        interior=slot in INTERIOR_SLOTS,
+        kind=slot_kind(slot),
         l0=l0_report,
         retake_count=count,
     )
