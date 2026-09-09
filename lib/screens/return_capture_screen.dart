@@ -168,6 +168,34 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
   /// True while the 判定未達標 panel is up and the screen is frozen on [_held].
   bool _reviewing = false;
 
+  /// The slot whose L1 verdict the driver has tapped open, if any.
+  ///
+  /// L1 answers while the driver is still walking round the car, so a photo
+  /// they filed two slots ago can come back 需重拍 — and until now all that
+  /// said so was an amber wash on a 72pt tile. The wash is a good alarm and a
+  /// terrible explanation: it cannot say *why*, and tapping it simply switched
+  /// slots, so the only way to find out was to shoot the frame again and hope.
+  ///
+  /// Tapping it now freezes the screen on the photo L1 is talking about and
+  /// puts its own words over it, with the same two answers the shutter's own
+  /// 判定未達標 panel offers — 重拍 or keep it. The driver reads the reason
+  /// while looking at the frame it is about, which is the only place that
+  /// sentence means anything.
+  CaptureSpot? _inspecting;
+
+  /// True while the live feed is standing still behind a panel — either the
+  /// shutter's 判定未達標 or a slot the driver has tapped open.
+  bool get _frozen => _reviewing || _inspecting != null;
+
+  /// The photo laid over the preview, if the screen is holding one.
+  File? get _frozenFrame {
+    final held = _held;
+    if (held != null) return held.file;
+    final spot = _inspecting;
+    if (spot == null) return null;
+    return widget.session?.statusOf(spot).file ?? _frames[spot];
+  }
+
   /// The photo taken when the shutter was pressed on a failing frame.
   ///
   /// 仍要送出 has to commit *this* — the frame the driver composed and chose —
@@ -294,7 +322,7 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
   /// the photo were taken then, the frame they spent a minute lining up would
   /// be thrown away and replaced by whatever the phone saw as it came down.
   void _onShutter() {
-    if (_reviewing || _capturing) return;
+    if (_frozen || _capturing) return;
     unawaited(_shutter());
   }
 
@@ -408,14 +436,64 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
   /// they already knew about. Tapping the tile is the obvious gesture and it now
   /// does the obvious thing.
   ///
-  /// While 判定未達標 is up the tiles are inert. That panel is a question about
-  /// a specific frame — 重拍 or 仍要送出 — and walking away from it would leave
-  /// the held photo in limbo.
+  /// While a panel is up the tiles are inert. That panel is a question about a
+  /// specific frame — and walking away from it would leave the photo it is
+  /// about in limbo.
+  ///
+  /// A tile L1 has flagged is the exception to "tapping a tile switches slot":
+  /// it opens [_inspecting] instead, because switching to it would throw away
+  /// the one thing the driver tapped it to find out — *what was wrong with it*.
+  /// The panel still gets them to the same place, with 重拍 doing the switch
+  /// they would otherwise have got for free.
   void _selectSpot(CaptureSpot spot) {
-    if (_reviewing || _capturing || spot == _current) return;
+    if (_frozen || _capturing) return;
+    if (widget.session?.statusOf(spot).phase == SlotPhase.retake) {
+      setState(() => _inspecting = spot);
+      return;
+    }
+    if (spot == _current) return;
     setState(() => _current = spot);
     // A different slot is a different shot, so it gets the full strict window
     // rather than inheriting the relaxation clock the last one had earned.
+    _camera.restartAim();
+    _simulator.restart();
+  }
+
+  /// 重拍 on a flagged slot: back to the live feed, aimed at that slot.
+  ///
+  /// The rejected frame is dropped from the strip and from the session in the
+  /// same breath, so the tile goes back to being an empty one. Leaving it
+  /// filled would mean the driver walks away from a slot that still shows a
+  /// photo and still shows an amber wash — and [_pending] would be the only
+  /// thing that knew the difference.
+  void _retakeInspected() {
+    final spot = _inspecting;
+    if (spot == null) return;
+    setState(() {
+      _inspecting = null;
+      _current = spot;
+      _pending.add(spot);
+      _taken.remove(spot);
+      _frames.remove(spot);
+    });
+    widget.session?.clear(spot);
+    _camera.restartAim();
+    _simulator.restart();
+  }
+
+  /// 保留 on a flagged slot: the photo stands, and the driver carries on.
+  ///
+  /// "Carries on" is the next slot with nothing in it, which is usually the one
+  /// they were already pointed at — the flag arrived while they were lining up
+  /// somewhere else, and answering it should not cost them that position. Only
+  /// when the slot they are standing on is already filled does this move them
+  /// forward, and then by the same walking order the strip is in.
+  void _keepInspected() {
+    setState(() => _inspecting = null);
+    if (_pending.contains(_current)) return;
+    final next = _nextEmpty;
+    if (next == null) return;
+    setState(() => _current = next);
     _camera.restartAim();
     _simulator.restart();
   }
@@ -535,7 +613,8 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
     final safeTop = media.padding.top;
     final verdict = _verdict;
     final spot = _current;
-    final held = _held;
+    final frozenFrame = _frozenFrame;
+    final inspected = _inspecting;
 
     final preview = _previewRect(media.size, safeTop);
 
@@ -560,15 +639,18 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
                 : Image.asset(spot.viewfinderAsset, fit: BoxFit.cover),
           ),
 
-          // The held frame, laid over the still-running preview. 判定未達標 is a
-          // question about a specific photo, so that photo is what the driver
-          // reads it against — and freezing here rather than pausing the stream
-          // keeps the camera warm for the retake that usually follows.
-          if (held != null)
+          // The frame under the panel, laid over the still-running preview.
+          //
+          // Both panels are questions about a specific photo, so that photo is
+          // what the driver reads them against — the one the shutter just took
+          // for 判定未達標, the one L1 flagged for a tapped tile. Freezing here
+          // rather than pausing the stream keeps the camera warm for the
+          // retake that usually follows.
+          if (frozenFrame != null)
             Positioned.fromRect(
               rect: preview,
               child: Image.file(
-                held.file,
+                frozenFrame,
                 fit: BoxFit.cover,
                 gaplessPlayback: true,
                 cacheWidth: _heldDecodeWidth,
@@ -584,7 +666,10 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
           // angle to ask for a hand's width from a seat back, so an outline
           // there is a shape nobody can match and the only thing it manages to
           // say is that they have failed to match it.
-          if (spot.guide != GuideStyle.none)
+          // Not while a filed photo is up: the silhouette is a live aiming aid
+          // and drawing it over a still asks the driver to line up a car that
+          // has already been photographed.
+          if (spot.guide != GuideStyle.none && inspected == null)
             Positioned.fromRect(
               rect: _guideRect(preview, spot),
               child: _AimGuide(spot: spot, state: verdict.state),
@@ -605,13 +690,17 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
             ),
           ),
 
-          Positioned(
-            left: 16,
-            top: safeTop + 97,
-            child: _AimBadge(state: verdict.state),
-          ),
+          // The badge reads the live stream, so it stands down over a filed
+          // photo — 未對準 flickering above a still the driver took ten seconds
+          // ago is a verdict about a frame nobody is looking at.
+          if (inspected == null)
+            Positioned(
+              left: 16,
+              top: safeTop + 97,
+              child: _AimBadge(state: verdict.state),
+            ),
 
-          if (verdict.hint != null && !_reviewing)
+          if (verdict.hint != null && !_frozen)
             Positioned(
               left: 0,
               right: 0,
@@ -626,7 +715,7 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
           // Zoom and torch act on a stream the driver is no longer looking
           // at while the frame is held, so they stand down until 重拍 puts the
           // live feed back.
-          if (!_reviewing)
+          if (!_frozen)
             Positioned(
               right: 24,
               bottom: 90,
@@ -638,7 +727,39 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
               ),
             ),
 
-          if (_camera.failure != CaptureFailure.none)
+          // One panel at a time, and the two that answer a gesture come first:
+          // the driver pressed the shutter or tapped a tile, and an answer
+          // about the camera being unavailable is not a reply to either.
+          if (_reviewing)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: _stripBottom + _stripSize + 140,
+              child: Center(
+                child: _BelowStandardPanel(
+                  hint: verdict.hint,
+                  wrongCar: verdict.state == AimState.wrongCar,
+                  expectedPlate: widget.expectedPlate,
+                  onSubmitAnyway: () => _commit(_held),
+                  onRetake: _retake,
+                ),
+              ),
+            )
+          else if (inspected != null)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: _stripBottom + _stripSize + 140,
+              child: Center(
+                child: _FlaggedPhotoPanel(
+                  spot: inspected,
+                  status: widget.session?.statusOf(inspected),
+                  onKeep: _keepInspected,
+                  onRetake: _retakeInspected,
+                ),
+              ),
+            )
+          else if (_camera.failure != CaptureFailure.none)
             Positioned(
               left: 0,
               right: 0,
@@ -650,21 +771,6 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
                       ? CapturePermissions.openSettings
                       : null,
                   onRetry: () => unawaited(_camera.start()),
-                ),
-              )
-            )
-          else if (_reviewing)
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: _stripBottom + _stripSize + 140,
-              child: Center(
-                child: _BelowStandardPanel(
-                  hint: verdict.hint,
-                  wrongCar: verdict.state == AimState.wrongCar,
-                  expectedPlate: widget.expectedPlate,
-                  onSubmitAnyway: () => _commit(held),
-                  onRetake: _retake,
                 ),
               ),
             ),
@@ -679,11 +785,11 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
               frames: _frames,
               current: _current,
               session: widget.session,
-              onSelect: _reviewing ? null : _selectSpot,
+              onSelect: _frozen ? null : _selectSpot,
             ),
           ),
 
-          if (!_reviewing)
+          if (!_frozen)
             Positioned(
               left: 54,
               bottom: 90,
@@ -703,10 +809,10 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
               // driver who is reading the panel — but faded and inert, because
               // the answer is now one of the panel's two buttons.
               child: IgnorePointer(
-                ignoring: _reviewing,
+                ignoring: _frozen,
                 child: AnimatedOpacity(
                   duration: const Duration(milliseconds: 160),
-                  opacity: _reviewing ? 0.35 : 1,
+                  opacity: _frozen ? 0.35 : 1,
                   child: _ShutterButton(
                     armed: verdict.isAcceptable,
                     onTap: _onShutter,
@@ -1580,6 +1686,60 @@ class _BelowStandardPanel extends StatelessWidget {
       actions: [
         _PanelAction(label: '仍要送出', onTap: onSubmitAnyway, filled: false),
         _PanelAction(label: '重拍這張', onTap: onRetake, filled: true),
+      ],
+    );
+  }
+}
+
+/// L1 flagged this photo — raised when the driver taps its amber tile.
+///
+/// The counterpart to [_BelowStandardPanel] and deliberately built out of the
+/// same glass: both are "this frame has a problem, here are your two answers",
+/// and the driver should not have to work out that they are different kinds of
+/// question. What differs is who is asking. 判定未達標 is L0 talking about the
+/// frame in the viewfinder a quarter of a second ago; this is L1 talking about
+/// a photo that is already filed, so the choice is 保留 rather than 仍要送出 —
+/// the photo has been submitted either way, and the only thing still open is
+/// whether it gets replaced.
+class _FlaggedPhotoPanel extends StatelessWidget {
+  const _FlaggedPhotoPanel({
+    required this.spot,
+    required this.onKeep,
+    required this.onRetake,
+    this.status,
+  });
+
+  final CaptureSpot spot;
+  final SlotStatus? status;
+  final VoidCallback onKeep;
+  final VoidCallback onRetake;
+
+  /// L1's own words, and nothing invented on top of them.
+  ///
+  /// `assessable_reason` says what it could not see; `retake_hint` says what to
+  /// do about it. Both are worth having and either can be missing, so they are
+  /// joined rather than picked between — and when neither came back the panel
+  /// still has to say something, because the tile is amber and the driver is
+  /// standing there holding a phone.
+  String get _body {
+    final result = status?.result;
+    final lines = <String>[
+      if (result?.assessableReason != null) result!.assessableReason!
+      else if (status?.message != null) status!.message!,
+      if (result?.retakeHint != null) result!.retakeHint!,
+    ];
+    if (lines.isEmpty) return '這張照片可能無法判讀，建議重拍一張。保留也可以，不會擋下還車。';
+    return '${lines.join('。')}。保留也可以，不會擋下還車。';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _GlassPanel(
+      title: '${spot.label}需要重拍',
+      body: _body,
+      actions: [
+        _PanelAction(label: '保留', onTap: onKeep, filled: false),
+        _PanelAction(label: '重拍', onTap: onRetake, filled: true),
       ],
     );
   }

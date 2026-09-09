@@ -12,6 +12,7 @@ import '../services/trip_state.dart';
 import 'return_analysis_screen.dart';
 import 'return_capture_screen.dart';
 import 'return_done_screen.dart';
+import 'return_issues_screen.dart';
 import 'return_release_screen.dart';
 
 /// The 還車拍照 flow end to end (Figma group 986:1342).
@@ -19,12 +20,17 @@ import 'return_release_screen.dart';
 /// Every step lives on one route rather than a stack of pushes: there is one
 /// thing to leave, and leaving it abandons the return.
 ///
-/// There used to be a fifth step between the analysis and the release — one
-/// screen about one problem, with a 重拍 button on it. It is gone. The analysis
-/// page reports every problem the return has, each with the photo it is about
-/// and L1's own words for it, which is strictly more than that screen could say
-/// and says it without a second round trip. Retaking is still possible and
-/// always was: tapping a tile in the viewfinder goes back to that slot.
+/// The analysis and the 需處理 page are two steps, not one, and the split is
+/// down the question each answers: the bars say 「收到了、過了幾張」 while they
+/// are still filling, and only once they settle does the next page ask 「要不要
+/// 回去重拍」. A clean return never sees the second page at all — [_afterAnalysis]
+/// walks it straight to the release.
+///
+/// The 需處理 page lists **every** problem and its 重拍 re-opens the viewfinder
+/// with all of the flagged slots pending at once, which is the whole reason it
+/// is worth a page. Figma draws one screen per problem; that costs a driver
+/// with two of them two laps of the car and two waits, and hides the second
+/// one until the first is done.
 ///
 /// Which branch plays is decided by [ReturnScenario]. Long-pressing the
 /// viewfinder title opens the picker, which is how the six board scenarios are
@@ -54,7 +60,7 @@ class ReturnFlowScreen extends StatefulWidget {
   State<ReturnFlowScreen> createState() => _ReturnFlowScreenState();
 }
 
-enum _Step { capture, analysis, release, done }
+enum _Step { capture, analysis, issues, release, done }
 
 /// The board's 拍照流程 is all seven slots, in enum order: 加油卡/停車卡, both
 /// cabin rows, then the four body corners.
@@ -140,8 +146,20 @@ class _ReturnFlowScreenState extends State<ReturnFlowScreen> {
     super.dispose();
   }
 
-  ReturnAnalysis get _analysis =>
-      _live ? _session.analysis : _scenario.analysis;
+  /// True once the driver has been back round for a scripted retake.
+  ///
+  /// A scripted scenario's verdict is a constant, so without this the 需處理
+  /// page would hand 情境② back its own glare complaint for ever: re-shoot the
+  /// corner, wait for the bars, get told about the same reflection. The board
+  /// says ② ends 「補拍一張後放行」, and this is that sentence. Live runs need
+  /// nothing of the sort — L1 looks at the new photo and says what it sees.
+  bool _scriptedRetakeDone = false;
+
+  ReturnAnalysis get _analysis {
+    if (_live) return _session.analysis;
+    if (_scriptedRetakeDone) return ReturnAnalysis.clear;
+    return _scenario.analysis;
+  }
 
   void _restart(ReturnScenario scenario) => setState(() {
     // A previous run's verdict must not land on top of the new one.
@@ -150,6 +168,7 @@ class _ReturnFlowScreenState extends State<ReturnFlowScreen> {
     // Hand-picking a scenario takes the run off the offline path: ① is then
     // being demonstrated for itself, silence included.
     _offline = false;
+    _scriptedRetakeDone = false;
     _taken = {};
     _pending = _allSpots.toSet();
     _frames.clear();
@@ -161,7 +180,7 @@ class _ReturnFlowScreenState extends State<ReturnFlowScreen> {
     final picked = await showModalBottomSheet<ReturnScenario>(
       context: context,
       backgroundColor: Colors.white,
-      // Seven scenarios with two lines of copy each do not fit above the fold
+      // Eight scenarios with two lines of copy each do not fit above the fold
       // on a 346dp display, and a modal sheet does not scroll unless it is told
       // it may grow past half the screen.
       isScrollControlled: true,
@@ -184,7 +203,18 @@ class _ReturnFlowScreenState extends State<ReturnFlowScreen> {
     setState(() => _scenario = ReturnScenario.allClear);
   }
 
+  /// 前往下一步 / 繼續還車 under the settled bars.
+  ///
+  /// A clean return skips the 需處理 page rather than showing an empty one.
   void _afterAnalysis() {
+    if (_analysis.allClear) {
+      _release();
+      return;
+    }
+    setState(() => _step = _Step.issues);
+  }
+
+  void _release() {
     // Asked here, not at launch and not next to the camera prompt: the page the
     // driver is about to see says 「結果將以通知告知，您可立即離開」, so the reason for
     // the permission is on screen while the system dialog is up. A refusal
@@ -192,6 +222,28 @@ class _ReturnFlowScreenState extends State<ReturnFlowScreen> {
     // 訂單明細 carries the same copy whenever they go looking for it.
     unawaited(ReturnNotifications.instance.requestPermission());
     setState(() => _step = _Step.release);
+  }
+
+  /// 重拍 on the 需處理 page: back to the viewfinder with [spots] pending.
+  ///
+  /// All of them at once, which is the point of listing every problem on one
+  /// page — the driver walks one lap and re-shoots everything that was flagged,
+  /// instead of a lap per problem. The old frames are dropped so the strip
+  /// shows those slots as empty; the ones that passed keep their photos and
+  /// their ticks, so what is left to do is the only thing that looks undone.
+  void _retakeSpots(Set<CaptureSpot> spots) {
+    if (spots.isEmpty) return;
+    for (final spot in spots) {
+      _session.clear(spot);
+      _frames.remove(spot);
+    }
+    setState(() {
+      _scriptedRetakeDone = true;
+      _pending = {..._allSpots.where(spots.contains)};
+      _taken = _allSpots.toSet().difference(_pending);
+      _step = _Step.capture;
+      _captureRun++;
+    });
   }
 
   /// 回到主頁 — drop back to the map, then let the follow-up pushes land.
@@ -287,6 +339,14 @@ class _ReturnFlowScreenState extends State<ReturnFlowScreen> {
       analysis: _analysis,
       session: _live ? _session : null,
       onContinue: _afterAnalysis,
+    ),
+    _Step.issues => ReturnIssuesScreen(
+      findings: [
+        for (final finding in _analysis.findings)
+          finding.withPhoto(_frames[finding.spot]),
+      ],
+      onRetake: _retakeSpots,
+      onContinue: _release,
     ),
     _Step.release => ReturnReleaseScreen(
       onFinish: () => setState(() => _step = _Step.done),

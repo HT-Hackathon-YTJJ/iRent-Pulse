@@ -77,6 +77,10 @@ class AppColor {
   static const noteAmber = Color(0xFFD4A82C);
   static const noteAmberFill = Color(0x47C9A227); // rgba(201,162,39,0.28)
 
+  /// Copy inside that block. Darker than the block's own amber, which is a
+  /// 10% wash and would leave 12px type well under 3:1 against white.
+  static const noteAmberText = Color(0xFFB8860B);
+
   static const barTrack = Color(0xFFF2F3F5);
   static const barBusy = Color(0xFFB9BEB5);
   static const textProcessing = Color(0xFF5C5C5C);

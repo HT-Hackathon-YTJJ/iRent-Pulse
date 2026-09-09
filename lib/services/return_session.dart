@@ -307,6 +307,7 @@ class ReturnSession extends ChangeNotifier {
               result.assessableReason ?? '照片無法判讀',
               result.retakeHint,
             ].whereType<String>().join('。'),
+            kind: FindingKind.unreadable,
             spot: spot,
             photo: status.file,
           ),
@@ -328,6 +329,7 @@ class ReturnSession extends ChangeNotifier {
               reason:
                   '遮陽板的卡套裡沒有看到${missing.join('與')}。'
                   '請確認是否還在身上，放回卡套後再完成還車。',
+              kind: FindingKind.missingCard,
               spot: spot,
               photo: status.file,
             ),
@@ -344,6 +346,7 @@ class ReturnSession extends ChangeNotifier {
             reason:
                 '偵測到$items。請將垃圾帶走後再完成還車，'
                 '順手帶走可維持你的優良駕駛等級。',
+            kind: FindingKind.trash,
             spot: spot,
             photo: status.file,
           ),

@@ -324,22 +324,45 @@ class AnalysisCheck {
   Color get resultColor => ok ? AppColor.successText : AppColor.aimNear;
 }
 
-/// One problem the 還車分析 page reports, drawn as its own card.
+/// What kind of problem a [ReturnFinding] is.
+///
+/// Not a severity. The three are different questions with different answers —
+/// a frame nobody can read is fixed by standing somewhere else, rubbish is
+/// fixed by picking it up, a missing card is fixed by walking back to the
+/// office — and the 需處理 page picks its copy off this rather than off the
+/// slot, which cannot tell 「後座有垃圾」 from 「後座拍糊了」.
+enum FindingKind {
+  /// L1 could not read the photo.
+  unreadable,
+
+  /// The cabin has rubbish in it.
+  trash,
+
+  /// The 遮陽板 card pouch is missing a card.
+  missingCard,
+}
+
+/// One problem the 需處理 page reports, drawn as its own card.
 ///
 /// **Every problem is reported, not the worst one.** The page used to pick a
-/// single issue and send the driver to a screen about it: with two bad photos
-/// the second one was invisible until the first had been redone and the
-/// analysis had run again, so a driver with two problems was told about them
-/// one at a time, in two round trips, with no way to know a second was coming.
-/// Ranking answers "which is worst" — a question nobody asked — and hides the
-/// answer to "what is wrong", which is the only one they have.
+/// single issue and ask about it: with two bad photos the second one was
+/// invisible until the first had been redone and the analysis had run again,
+/// so a driver with two problems was told about them one at a time, in two
+/// round trips, with no way to know a second was coming. Ranking answers
+/// "which is worst" — a question nobody asked — and hides the answer to "what
+/// is wrong", which is the only one they have.
 class ReturnFinding {
   const ReturnFinding({
     required this.title,
     required this.reason,
+    required this.kind,
     this.spot,
     this.photo,
   });
+
+  /// Which of the three problems this is. Drives the page's headline, its
+  /// advisory note and the label on its retake button.
+  final FindingKind kind;
 
   /// 「停車卡不通過」/「右後不通過」— what the card is about.
   final String title;
@@ -354,6 +377,27 @@ class ReturnFinding {
 
   /// The frame the driver actually took. Null on a scripted run.
   final File? photo;
+
+  /// The same finding with the driver's own frame attached.
+  ///
+  /// A scripted scenario is a `const`, so it cannot carry a [File] and its
+  /// cards fall back to the slot's 示意圖. That fallback is right when there is
+  /// no photo — and wrong here, because there is one: the driver shot that slot
+  /// a minute ago and the card is *about* that shot. The flow is the only thing
+  /// holding both, so it pairs them up on the way to the page.
+  ///
+  /// A finding that already has a photo keeps it. Live findings arrive with
+  /// L1's own copy of the frame and it is the one L1 was looking at.
+  ReturnFinding withPhoto(File? file) {
+    if (file == null || photo != null) return this;
+    return ReturnFinding(
+      title: title,
+      reason: reason,
+      kind: kind,
+      spot: spot,
+      photo: file,
+    );
+  }
 }
 
 /// The verdict the 還車分析 page renders.
@@ -372,12 +416,13 @@ class ReturnAnalysis {
 
   bool get allClear => findings.isEmpty;
 
-  /// The primary button under the settled cards.
+  /// The primary button under the settled bars.
   ///
-  /// One label now. It used to fork into 前往下一步 because a problem sent the
-  /// driver to a second screen to answer a question about it; the cards answer
-  /// it here, so the next step is the same next step either way.
-  String get continueLabel => '繼續還車';
+  /// It forks, because the page after it does. A clean return goes straight to
+  /// the release page and the button says so; a return with problems has a
+  /// page of its own to go to, and 前往下一步 is the one label that does not
+  /// promise which way that page ends.
+  String get continueLabel => allClear ? '繼續還車' : '前往下一步';
 
   static const _photoOk = AnalysisCheck(
     title: '照片可判讀性',
@@ -411,6 +456,43 @@ class ReturnAnalysis {
       ReturnFinding(
         title: '右後不通過',
         reason: '照片有不明亮點（局部反光），車身漆面被洗白，影響判讀。請換一個角度避開光源後補拍一張。',
+        kind: FindingKind.unreadable,
+        spot: CaptureSpot.rearRight,
+      ),
+    ],
+  );
+
+  /// 情境⑦ — two problems at once, which is the case the 需處理 page exists
+  /// for. One bad photo and one dirty cabin is the ordinary way a return goes
+  /// wrong twice, and it is the only way to see the difference the page makes:
+  /// both are named up front and one 重拍 re-opens both slots, where a page per
+  /// problem would send the driver round the car twice.
+  static const multiple = ReturnAnalysis(
+    photo: AnalysisCheck(
+      title: '照片可判讀性',
+      pendingLabel: '正在處理中',
+      resultLabel: '右後不通過',
+      ok: false,
+      ratio: 0.857,
+    ),
+    cabin: AnalysisCheck(
+      title: '車內整潔度',
+      pendingLabel: '正在處理中',
+      resultLabel: '後座：飲料杯、紙袋',
+      ok: false,
+      ratio: 0.78,
+    ),
+    findings: [
+      ReturnFinding(
+        title: '後座有垃圾',
+        reason: '腳踏墊處有飲料杯與紙袋。請將垃圾帶走後再完成還車，順手帶走可維持你的優良駕駛等級。',
+        kind: FindingKind.trash,
+        spot: CaptureSpot.interiorRear,
+      ),
+      ReturnFinding(
+        title: '右後不通過',
+        reason: '照片有不明亮點（局部反光），車身漆面被洗白，影響判讀。請換一個角度避開光源後補拍一張。',
+        kind: FindingKind.unreadable,
         spot: CaptureSpot.rearRight,
       ),
     ],
@@ -430,6 +512,7 @@ class ReturnAnalysis {
       ReturnFinding(
         title: '後座有垃圾',
         reason: '腳踏墊處有飲料杯與紙袋。請將垃圾帶走後再完成還車，順手帶走可維持你的優良駕駛等級。',
+        kind: FindingKind.trash,
         spot: CaptureSpot.interiorRear,
       ),
     ],
@@ -506,7 +589,14 @@ enum ReturnScenario {
   severeDamage(number: '⑤', title: '嚴重損傷（求償）', caption: '放行頁一字不提，求償由客服人工聯繫。'),
 
   /// ⑥ 亂拍・自負責任送出 — 還車不阻斷
-  sloppy(number: '⑥', title: '亂拍・自負責任送出', caption: '快門永不鎖定，不合格照片可直接送出。');
+  sloppy(number: '⑥', title: '亂拍・自負責任送出', caption: '快門永不鎖定，不合格照片可直接送出。'),
+
+  /// ⑦ 兩個問題同時發生 — 需處理頁一次列完、一次重拍
+  multiple(
+    number: '⑦',
+    title: '同時有兩個問題',
+    caption: '後座有垃圾＋右後反光，一頁列完，一次重拍兩張。',
+  );
 
   const ReturnScenario({
     required this.number,
@@ -522,11 +612,18 @@ enum ReturnScenario {
   ReturnAnalysis get analysis => switch (this) {
     ReturnScenario.glare => ReturnAnalysis.glare,
     ReturnScenario.trash => ReturnAnalysis.trash,
+    ReturnScenario.multiple => ReturnAnalysis.multiple,
     _ => ReturnAnalysis.clear,
   };
 
   /// Pushes that arrive after the driver has left.
   List<ReturnNotice> get notices => switch (this) {
+    ReturnScenario.multiple => const [
+      ReturnNotice(
+        body: '已確認車內整潔、補拍照片可判讀，您的信用分數維持不變，感謝配合✨',
+        delay: Duration(seconds: 3),
+      ),
+    ],
     ReturnScenario.trash => const [
       ReturnNotice(
         body: '已確認車內整潔，您的信用分數維持不變，感謝配合✨',
