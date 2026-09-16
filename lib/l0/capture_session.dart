@@ -492,6 +492,46 @@ class CaptureSession extends ChangeNotifier {
     }
   }
 
+  /// 車牌比對 against the photo that was just filed, rather than the viewfinder.
+  ///
+  /// The live check in [_maybeReadPlate] reads the preview stream, which is the
+  /// only thing that can turn the frame red *while the driver is still aiming*.
+  /// It is also the only thing that reads nothing at all when the shutter files
+  /// a photo the camera never took — a demo run, or a frame whose plate the
+  /// preview resolution never resolved but the full-size capture did. This
+  /// reads the filed photo, so every corner shot gets checked on the evidence
+  /// that is actually sent to L1.
+  ///
+  /// Same asymmetry as everywhere else in L0: anything short of a plate read
+  /// clearly as *another* car comes back [PlateMatch.unknown] and says nothing.
+  Future<PlateMatch> matchShot(File photo) async {
+    if (expectedPlate.isEmpty) return PlateMatch.unknown;
+    var reader = _plateReader;
+    if (reader == null) {
+      reader = await PlateReader.load();
+      _plateReader = reader;
+      if (reader == null) return PlateMatch.unknown;
+    }
+    // The frame loop may still have a recognition in flight. Waiting a beat
+    // beats skipping the check on the one photo that gets sent.
+    for (var attempt = 0; reader.busy && attempt < 4; attempt++) {
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+    }
+    if (_disposed) return PlateMatch.unknown;
+
+    final text = await reader.readFile(photo.path);
+    if (_disposed) return PlateMatch.unknown;
+    final candidates = extractPlates(text ?? '');
+    final match = matchPlates(candidates, expectedPlate);
+    if (_logPlates) {
+      debugPrint(
+        'L0 車牌(照片): ocr=${text?.replaceAll(RegExp(r"\s+"), " ").trim()} '
+        '候選=$candidates → ${match.name}',
+      );
+    }
+    return match;
+  }
+
   @override
   Future<void> dispose() {
     _disposed = true;

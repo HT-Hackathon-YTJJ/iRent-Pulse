@@ -12,6 +12,7 @@ import '../design/tokens.dart';
 import '../l0/aim.dart';
 import '../l0/capture_session.dart';
 import '../l0/permissions.dart';
+import '../l0/plate.dart';
 import '../services/return_session.dart';
 
 /// The seven-slot viewfinder, and the place L0 actually runs.
@@ -263,6 +264,11 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
     return null;
   }
 
+  /// `--dart-define=DEMO_PHOTO_DIR=<dir>` makes the shutter file
+  /// `<dir>/<CaptureSpot.name>.webp` instead of a camera frame. Unset in every
+  /// real build.
+  static const String _demoPhotoDir = String.fromEnvironment('DEMO_PHOTO_DIR');
+
   bool get _liveCamera => _camera.ready;
 
   AimVerdict get _verdict =>
@@ -328,17 +334,59 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
 
   /// Expose the frame, then decide what to do with it.
   Future<void> _shutter() async {
-    final verdict = _verdict;
+    var verdict = _verdict;
     setState(() => _capturing = true);
 
     // `manual: true` rides along on the photo as `capture_mode: manual` /
     // `bypassed`; L1 tightens its readability check on the strength of it. The
     // shutter is the only way a photo is taken here, so it is always set.
     CapturedShot? shot;
-    if (_liveCamera) shot = await _camera.capture(manual: true);
+    final demo = _demoPhotoDir.isEmpty
+        ? null
+        : File('$_demoPhotoDir/${_current.name}.webp');
+    if (demo != null && demo.existsSync()) {
+      // Screenshots for the design board: file the slot's demo photo as if
+      // the camera had taken it, so no one has to aim a phone at a monitor.
+      shot = CapturedShot(
+        file: demo,
+        report: verdict.report(manual: true),
+        manual: true,
+      );
+    } else if (_liveCamera) {
+      shot = await _camera.capture(manual: true);
+    }
     if (!mounted) return;
 
     _shutterFlash.forward(from: 0);
+
+    // 車牌比對 against the photo that is about to be filed, not only against the
+    // frames the viewfinder happened to read. The preview check can miss a
+    // plate the full-size capture resolves, and it reads nothing at all when
+    // the shutter files a stored photo. Only the four body corners have a plate
+    // in shot; the cabin rows and the 遮陽板 do not.
+    if (shot != null && _current.isCorner && widget.expectedPlate.isNotEmpty) {
+      final match = await _camera.matchShot(shot.file);
+      if (!mounted) return;
+      if (match == PlateMatch.mismatch) {
+        // Not locked, so this lands in the same place every other failing
+        // verdict does: the photo is held under 車輛不符, with 重拍 and
+        // 仍要送出. The reader can be wrong, and this is exactly the moment a
+        // driver standing at their own car needs the override.
+        verdict = AimVerdict(
+          state: AimState.wrongCar,
+          hint: AimState.wrongCar.hint,
+          plate: PlateMatch.mismatch,
+        );
+        shot = CapturedShot(
+          file: shot.file,
+          report: {
+            ...shot.report,
+            'plate': {'match': PlateMatch.mismatch.name, 'source': 'photo'},
+          },
+          manual: shot.manual,
+        );
+      }
+    }
 
     if (verdict.isAcceptable) {
       // The shutter stays shut for the flight. It is a fifth of a second of a

@@ -81,6 +81,33 @@ class PlateReader {
     }
   }
 
+  /// Read the text in a photo that has already been written to disk.
+  ///
+  /// The live path above reads the viewfinder, which is the only thing that can
+  /// turn the frame red *while the driver is still aiming*. This one reads the
+  /// photo that was actually filed, which is the only thing that can say
+  /// anything about a shot the camera never saw — a demo run filing a stored
+  /// photo, or a frame whose plate only became legible once the shutter's
+  /// full-resolution capture resolved it.
+  ///
+  /// ML Kit decodes the file itself, so there is no sampling to do and no
+  /// recycled plane to race against.
+  Future<String?> readFile(String path) async {
+    if (_disposed || _busy) return null;
+    _busy = true;
+    try {
+      final recognised = await _recogniser.processImage(
+        InputImage.fromFilePath(path),
+      );
+      return recognised.text;
+    } catch (error) {
+      debugPrint('L0: 照片車牌辨識失敗 — $error');
+      return null;
+    } finally {
+      _busy = false;
+    }
+  }
+
   /// Greyscale NV21: the luma plane as-is, then neutral chroma.
   ///
   /// A plate is dark characters on a light field, so the colour being thrown

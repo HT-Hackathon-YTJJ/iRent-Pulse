@@ -17,5 +17,7 @@ class PlateReader {
 
   Future<String?> read(Uint8List luma, int width, int height) async => null;
 
+  Future<String?> readFile(String path) async => null;
+
   void dispose() {}
 }
