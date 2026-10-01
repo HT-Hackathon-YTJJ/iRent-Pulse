@@ -60,6 +60,10 @@ class CaptureSession extends ChangeNotifier {
   bool get ready =>
       _controller != null && _controller!.value.isInitialized && !_disposed;
 
+  /// True once the car detector has loaded. Without it there is no box to read
+  /// the driver's position off, so the turning outline stands down.
+  bool get detectorReady => _detector != null;
+
   CaptureFailure failure = CaptureFailure.none;
   String? failureDetail;
 
@@ -80,6 +84,13 @@ class CaptureSession extends ChangeNotifier {
   bool _requireGuide = true;
   DateTime _lastDetection = DateTime.fromMillisecondsSinceEpoch(0);
   DateTime _lastPlateRead = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// Where across the frame the last plate-shaped line was read, in the same
+  /// upright normalised coordinates as the car box, and when.
+  ///
+  /// The orbit guide uses it as a compass: which side of the car's box the
+  /// plate is on says which pair of corners the driver is standing at.
+  ({double x, DateTime at})? plateSighting;
   int _darkFrames = 0;
   int _brightFrames = 0;
 
@@ -414,9 +425,17 @@ class CaptureSession extends ChangeNotifier {
     _lastPlateRead = now;
     final luma = sampleRotatedLuma(pixels, rotation, region, outW, outH);
     unawaited(
-      reader.read(luma, outW, outH).then((text) {
+      reader.read(luma, outW, outH).then((reading) {
         if (_disposed) return;
+        final text = reading?.text;
         _plates.observe(text);
+        final centre = reading?.plateCentre(outW.toDouble());
+        if (centre != null) {
+          plateSighting = (
+            x: region.left + centre * region.width,
+            at: DateTime.now(),
+          );
+        }
         if (_logPlates) {
           debugPrint(
             'L0 車牌: ${outW}x$outH '

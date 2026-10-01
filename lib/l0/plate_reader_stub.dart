@@ -1,5 +1,7 @@
 import 'dart:typed_data';
 
+import 'plate.dart';
+
 /// The web build's plate reader: one that never loads.
 ///
 /// `google_mlkit_text_recognition` is a method-channel plugin with no web
@@ -15,7 +17,8 @@ class PlateReader {
 
   bool get busy => true;
 
-  Future<String?> read(Uint8List luma, int width, int height) async => null;
+  Future<PlateReading?> read(Uint8List luma, int width, int height) async =>
+      null;
 
   Future<String?> readFile(String path) async => null;
 

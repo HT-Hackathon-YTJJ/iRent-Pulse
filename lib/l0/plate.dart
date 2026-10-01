@@ -243,3 +243,26 @@ class PlateWatcher {
     if (_state == PlateMatch.mismatch) _state = PlateMatch.unknown;
   }
 }
+
+/// One OCR pass over a crop: the whole text, plus each recognised line with
+/// where it sits in the crop, in the crop's own pixels.
+///
+/// The positions are what lets the orbit guide use the plate as a compass: at
+/// 左前 and 右後 the plate end of the car is on the left of the car's box, at
+/// 右前 and 左後 on the right.
+class PlateReading {
+  const PlateReading({required this.text, this.lines = const []});
+
+  final String text;
+  final List<({String text, double left, double right})> lines;
+
+  /// Horizontal centre of the line that reads as a plate, as a fraction of
+  /// the crop width — or null if no line does.
+  double? plateCentre(double cropWidth) {
+    for (final line in lines) {
+      if (extractPlates(line.text).isEmpty) continue;
+      return (line.left + line.right) / 2 / cropWidth;
+    }
+    return null;
+  }
+}

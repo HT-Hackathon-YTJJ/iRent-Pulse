@@ -4,6 +4,8 @@ import 'dart:ui' show Size;
 import 'package:flutter/foundation.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 
+import 'plate.dart';
+
 /// 車牌辨識 on mobile — ML Kit's on-device Latin recogniser.
 ///
 /// The reasoning for ML Kit over a dedicated ALPR network is in
@@ -53,7 +55,7 @@ class PlateReader {
   /// Returns null when the reader is busy, disposed, or the call failed — none
   /// of which is evidence about the plate, and [PlateWatcher.observe] treats
   /// them all as "say nothing".
-  Future<String?> read(Uint8List luma, int width, int height) async {
+  Future<PlateReading?> read(Uint8List luma, int width, int height) async {
     if (_disposed || _busy) return null;
     if (luma.length < width * height) return null;
     _busy = true;
@@ -72,7 +74,18 @@ class PlateReader {
           ),
         ),
       );
-      return recognised.text;
+      return PlateReading(
+        text: recognised.text,
+        lines: [
+          for (final block in recognised.blocks)
+            for (final line in block.lines)
+              (
+                text: line.text,
+                left: line.boundingBox.left,
+                right: line.boundingBox.right,
+              ),
+        ],
+      );
     } catch (error) {
       debugPrint('L0: 車牌辨識失敗 — $error');
       return null;

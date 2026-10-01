@@ -9,6 +9,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 
 import '../data/return_inspection.dart';
 import '../design/tokens.dart';
+import '../guide/orbit_guide.dart';
 import '../l0/aim.dart';
 import '../l0/capture_session.dart';
 import '../l0/permissions.dart';
@@ -160,6 +161,23 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
     expectedPlate: widget.expectedPlate,
   );
 
+  /// The turning 3D outline for the four body corners.
+  ///
+  /// The static corner art asked the driver to find one of four fixed views
+  /// by eye. This draws the car as it looks from wherever the driver is
+  /// standing — worked out from the detector's box and carried along by the
+  /// gyroscope — and turns green when that is the corner the slot wants. See
+  /// `lib/guide/`.
+  final OrbitGuide _orbit = OrbitGuide();
+
+  /// The last detector box handed to [_orbit], so each detection is read
+  /// once rather than on every analysed frame.
+  Rect? _lastOrbitBox;
+
+  /// What the rest of the screen last rebuilt for, so the gyroscope's 60 Hz
+  /// only rebuilds the badge and pill when what they say changes.
+  String _orbitKey = '';
+
   /// Only used when there is no camera to read.
   late final _AimSimulator _simulator = _AimSimulator(
     onChanged: (_) => setState(() {}),
@@ -272,7 +290,56 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
   bool get _liveCamera => _camera.ready;
 
   AimVerdict get _verdict =>
-      _heldVerdict ?? (_liveCamera ? _camera.verdict : _simulator.verdict);
+      _heldVerdict ??
+      _withOrbit(_liveCamera ? _camera.verdict : _simulator.verdict);
+
+  /// The turning outline needs the camera *and* the detector: the only thing
+  /// that can place the driver round the car is the car in the frame. With
+  /// either missing — a denied permission, a build without the model, the
+  /// web — the four corners keep their static outlines instead.
+  bool get _orbitOn =>
+      _current.orbitAzimuth != null &&
+      _current.guide == GuideStyle.silhouette &&
+      _orbit.ready &&
+      _liveCamera &&
+      _camera.detectorReady;
+
+  /// L0's verdict, held back until the driver is at the right corner.
+  ///
+  /// L0 judges the frame — is there a car, is it the size of the outline,
+  /// is it sharp — and the orbit guide judges the angle. A frame is only
+  /// green when both are, and while the angle is wrong the pill says which
+  /// way to walk rather than repeating 對齊輪廓線, which the driver cannot act
+  /// on from the wrong side of the car.
+  AimVerdict _withOrbit(AimVerdict raw) {
+    final target = _current.orbitAzimuth;
+    if (target == null || !_orbitOn) return raw;
+    final az = _orbit.azimuth;
+    final error = _orbit.angleError;
+    final report = <String, Object?>{
+      'target_azimuth': target,
+      'azimuth': az == null ? null : double.parse(az.toStringAsFixed(1)),
+    };
+    if (raw.state == AimState.wrongCar) return raw.copyWith(orbit: report);
+    if (az == null || error == null) {
+      // Nothing has placed the driver yet. The detector does that on its own
+      // once it sees the whole car, so that is the one thing to ask for.
+      return raw.copyWith(
+        state: AimState.off,
+        hint: '把整台車放進畫面，自動判斷位置',
+        orbit: report,
+      );
+    }
+    if (error.abs() > OrbitGuide.tolerance) {
+      final way = error > 0 ? '往右' : '往左';
+      return raw.copyWith(
+        state: AimState.off,
+        hint: '$way繞到車的${_current.label}方・還差 ${error.abs().round()}°',
+        orbit: report,
+      );
+    }
+    return raw.copyWith(orbit: report);
+  }
 
   @override
   void initState() {
@@ -280,10 +347,16 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
     _camera.addListener(_onCameraTick);
     _simulator.start();
     unawaited(_camera.start());
+    _orbit.addListener(_onOrbitTick);
+    _orbit.tracker.addListener(_onOrbitTick);
+    unawaited(_orbit.load());
   }
 
   @override
   void dispose() {
+    _orbit.removeListener(_onOrbitTick);
+    _orbit.tracker.removeListener(_onOrbitTick);
+    _orbit.dispose();
     _camera.removeListener(_onCameraTick);
     _camera.dispose();
     _simulator.dispose();
@@ -302,6 +375,34 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
       _reportedNoCamera = true;
       widget.onNoCamera?.call();
     }
+    _feedOrbit();
+  }
+
+  /// Hand each new detection to the orbit guide — the box's shape, and which
+  /// side of it the plate was read on if that was recent.
+  void _feedOrbit() {
+    if (!_orbitOn || _frozen) return;
+    final box = _camera.verdict.carBox;
+    if (box == null || identical(box, _lastOrbitBox)) return;
+    _lastOrbitBox = box;
+    final plate = _camera.plateSighting;
+    final fresh =
+        plate != null &&
+        DateTime.now().difference(plate.at) < const Duration(seconds: 2);
+    _orbit.observeBox(box, plateX: fresh ? plate.x : null);
+  }
+
+  void _onOrbitTick() {
+    if (!mounted) return;
+    final error = _orbit.angleError;
+    final key = [
+      _orbit.ready,
+      error == null ? '-' : (error / 2).round(),
+      _orbit.atTarget,
+    ].join('|');
+    if (key == _orbitKey) return;
+    _orbitKey = key;
+    setState(() {});
   }
 
   /// The shutter is the driver's. L0 decides *whether it may fire*, never
@@ -358,6 +459,15 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
     if (!mounted) return;
 
     _shutterFlash.forward(from: 0);
+
+    final orbit = verdict.orbit;
+    if (shot != null && orbit != null && !shot.report.containsKey('orbit')) {
+      shot = CapturedShot(
+        file: shot.file,
+        report: {...shot.report, 'orbit': orbit},
+        manual: shot.manual,
+      );
+    }
 
     // 車牌比對 against the photo that is about to be filed, not only against the
     // frames the viewfinder happened to read. The preview check can miss a
@@ -666,11 +776,25 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
 
     final preview = _previewRect(media.size, safeTop);
 
+    final orbitTarget = spot.orbitAzimuth;
+    final orbitOn = _orbitOn && orbitTarget != null;
+    if (orbitOn) {
+      _orbit.configure(
+        viewport: preview.size,
+        target: orbitTarget,
+        zoom: _camera.zoom,
+      );
+    }
+
     if (_liveCamera) {
       _camera.configure(
-        guideRect: _guideInFrame(preview, spot),
+        guideRect: orbitOn
+            ? _orbit.guideRectAt(
+                _orbit.shownAzimuth ?? _orbit.azimuth ?? orbitTarget,
+              )
+            : _guideInFrame(preview, spot),
         requireGuide: spot.isCorner,
-        guideAllowsEdge: spot.guideBleed != 0,
+        guideAllowsEdge: !orbitOn && spot.guideBleed != 0,
         slack: spot.aimSlack,
       );
     }
@@ -718,10 +842,23 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
           // and drawing it over a still asks the driver to line up a car that
           // has already been photographed.
           if (spot.guide != GuideStyle.none && inspected == null)
-            Positioned.fromRect(
-              rect: _guideRect(preview, spot),
-              child: _AimGuide(spot: spot, state: verdict.state),
-            ),
+            if (orbitOn)
+              Positioned.fromRect(
+                rect: preview,
+                child: TweenAnimationBuilder<Color?>(
+                  duration: const Duration(milliseconds: 240),
+                  tween: ColorTween(end: _orbitColor(verdict.state)),
+                  builder: (context, color, _) => OrbitOutline(
+                    guide: _orbit,
+                    color: color ?? _orbitColor(verdict.state),
+                  ),
+                ),
+              )
+            else
+              Positioned.fromRect(
+                rect: _guideRect(preview, spot),
+                child: _AimGuide(spot: spot, state: verdict.state),
+              ),
 
           const _Scrim(alignment: Alignment.topCenter, extent: 248),
           const _Scrim(alignment: Alignment.bottomCenter, extent: 272),
@@ -737,6 +874,29 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
               onLongPressTitle: widget.onLongPressTitle,
             ),
           ),
+
+          // Top-down map of the lap: which corners are done, which is next,
+          // and where the phone thinks the driver is.
+          if (orbitOn && inspected == null)
+            Positioned(
+              right: 16,
+              top: safeTop + 92,
+              child: ListenableBuilder(
+                listenable: _orbit.tracker,
+                builder: (context, _) => OrbitMap(
+                  azimuth: _orbit.azimuth,
+                  stops: [
+                    for (final s in widget.spots)
+                      if (s.orbitAzimuth != null)
+                        OrbitStop(
+                          azimuth: s.orbitAzimuth!,
+                          done: _taken.contains(s),
+                          current: s == spot,
+                        ),
+                  ],
+                ),
+              ),
+            ),
 
           // The badge reads the live stream, so it stands down over a filed
           // photo — 未對準 flickering above a still the driver took ten seconds
@@ -922,6 +1082,16 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
 }
 
 const String _assetRoot = 'assets/images/return/';
+
+/// Line colour of the turning outline. White rather than the grey of the
+/// static silhouette: it is line art over a live scene, and a thin grey line
+/// disappears against tarmac.
+Color _orbitColor(AimState state) => switch (state) {
+  AimState.off => Colors.white,
+  AimState.near => AppColor.aimNear,
+  AimState.locked => const Color(0xFF3CCF82),
+  AimState.wrongCar => AppColor.aimWrongCar,
+};
 
 // ---------------------------------------------------------------------------
 

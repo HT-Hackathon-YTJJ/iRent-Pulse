@@ -65,6 +65,9 @@ dependencies:
   # 注意：它的 pod 要求 iOS 15.5，所以 ios/Podfile 與 Xcode 的部署目標一起提到
   # 15.5（Flutter 的預設是 15.0）。
   google_mlkit_text_recognition: ^0.17.1
+  # 四角的 3D 轉向輪廓：陀螺儀 + 加速度計積分出「繞車走了幾度」。
+  # 只用這兩個，不用磁力計（車就是一大塊鐵）。見 lib/guide/heading.dart。
+  sensors_plus: ^7.1.0
 
 dev_dependencies:
   flutter_test:

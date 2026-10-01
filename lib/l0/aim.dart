@@ -29,6 +29,7 @@ class AimVerdict {
     this.detectorAvailable = true,
     this.plate = PlateMatch.unknown,
     this.plateSeen,
+    this.orbit,
   });
 
   final AimState state;
@@ -78,6 +79,36 @@ class AimVerdict {
   /// that names it. Null unless [plate] is [PlateMatch.mismatch].
   final String? plateSeen;
 
+  /// The orbit guide's reading for the four corners — where the driver was
+  /// standing and where they were asked to stand. Rides along to L1 in the
+  /// `l0` block; null for slots without a turning outline.
+  final Map<String, Object?>? orbit;
+
+  AimVerdict copyWith({
+    AimState? state,
+    String? hint,
+    bool clearHint = false,
+    Map<String, Object?>? orbit,
+  }) => AimVerdict(
+    state: state ?? this.state,
+    hint: clearHint ? null : (hint ?? this.hint),
+    carBox: carBox,
+    coverage: coverage,
+    blurScore: blurScore,
+    overExposed: overExposed,
+    underExposed: underExposed,
+    iou: iou,
+    fill: fill,
+    drift: drift,
+    streak: streak,
+    relaxed: relaxed,
+    manualOffered: manualOffered,
+    detectorAvailable: detectorAvailable,
+    plate: plate,
+    plateSeen: plateSeen,
+    orbit: orbit ?? this.orbit,
+  );
+
   /// **A plate mismatch is not acceptable, and still does not lock the shutter.**
   ///
   /// [AimState.wrongCar] is simply not [AimState.locked], so it flows into the
@@ -109,6 +140,7 @@ class AimVerdict {
     'relaxed': relaxed,
     'detector': detectorAvailable ? 'coco_ssd_mobilenet_v1' : 'none',
     'plate': {'match': plate.name, if (plateSeen != null) 'seen': plateSeen},
+    if (orbit != null) 'orbit': orbit,
   };
 }
 

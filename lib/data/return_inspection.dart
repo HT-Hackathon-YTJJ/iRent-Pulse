@@ -88,24 +88,28 @@ enum CaptureSpot {
     art: 'left_front',
     guideAspect: 1.8804,
     guideBleed: 0.16,
+    orbitAzimuth: 40,
   ),
   frontRight(
     label: '右前',
     art: 'right_front',
     guideAspect: 1.8955,
     guideBleed: -0.16,
+    orbitAzimuth: -40,
   ),
   rearRight(
     label: '右後',
     art: 'right_back',
     guideAspect: 1.8054,
     guideBleed: 0.16,
+    orbitAzimuth: -140,
   ),
   rearLeft(
     label: '左後',
     art: 'left_back',
     guideAspect: 1.8020,
     guideBleed: -0.16,
+    orbitAzimuth: 140,
   );
 
   const CaptureSpot({
@@ -117,6 +121,7 @@ enum CaptureSpot {
     this.isCorner = true,
     this.guide = GuideStyle.silhouette,
     this.guideBleed = 0,
+    this.orbitAzimuth,
   });
 
   /// Short name used inside the copy ("**右後** 照片有不明亮點…").
@@ -179,6 +184,16 @@ enum CaptureSpot {
   /// pair's instead of a shrunken whole car floating in the middle of the
   /// frame.
   final double guideBleed;
+
+  /// Where round the car this corner is shot from, for the turning 3D outline
+  /// (`lib/guide/`): degrees from the nose towards the car's **left**, seen
+  /// from above. 左前 is the car's own left-front corner — the nose on the left
+  /// of the frame, which is how the strip art and the demo photos have it.
+  ///
+  /// ±40° rather than ±45°: a little more of the side than of the end, which
+  /// is what puts both the plate and the whole flank in one frame. Null for
+  /// the three cabin slots.
+  final double? orbitAzimuth;
 
   /// Strip indicator shown while the slot is still empty. 288×288 — 4x the
   /// 72pt tile, so it stays sharp on a 3x screen. It used to be the design
