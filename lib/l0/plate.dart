@@ -247,21 +247,28 @@ class PlateWatcher {
 /// One OCR pass over a crop: the whole text, plus each recognised line with
 /// where it sits in the crop, in the crop's own pixels.
 ///
-/// The positions are what lets the orbit guide use the plate as a compass: at
-/// 左前 and 右後 the plate end of the car is on the left of the car's box, at
-/// 右前 and 左後 on the right.
+/// The positions are what lets the orbit guide use the plate as a compass:
+/// across the car's box it says which side the plate end is on (left at 左前
+/// and 右後), and up the box which end it is (the front plate is on the
+/// bumper, the rear one half way up the tailgate).
 class PlateReading {
   const PlateReading({required this.text, this.lines = const []});
 
   final String text;
-  final List<({String text, double left, double right})> lines;
+  final List<
+    ({String text, double left, double top, double right, double bottom})
+  >
+  lines;
 
-  /// Horizontal centre of the line that reads as a plate, as a fraction of
-  /// the crop width — or null if no line does.
-  double? plateCentre(double cropWidth) {
+  /// Centre of the line that reads as a plate, as fractions of the crop's
+  /// width and height — or null if no line does.
+  ({double x, double y})? plateSpot(double cropWidth, double cropHeight) {
     for (final line in lines) {
       if (extractPlates(line.text).isEmpty) continue;
-      return (line.left + line.right) / 2 / cropWidth;
+      return (
+        x: (line.left + line.right) / 2 / cropWidth,
+        y: (line.top + line.bottom) / 2 / cropHeight,
+      );
     }
     return null;
   }

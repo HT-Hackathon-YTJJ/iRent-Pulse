@@ -167,20 +167,70 @@ void main() {
   test('the tracker stays at the nose when the box turns ambiguous', () {
     final e = estimator();
     final tracker = OrbitTracker();
+    var t = 0.0;
+    void feed(double aspect, (double, double) plate) => tracker.observe(
+      e.read(aspect, widthFraction: 0.6, plate: plate),
+      bearing: 0,
+      size: 0.6,
+      at: t += 0.2,
+      prior: 40,
+    );
     for (var i = 0; i < 3; i++) {
-      tracker.observe(
-        e.candidates(1.29, widthFraction: 0.6, plateSide: -0.25),
-        prior: 40,
-      );
+      feed(1.29, (-0.25, 0.25));
     }
     expect(tracker.azimuth!.abs(), lessThan(25));
     for (var i = 0; i < 20; i++) {
-      tracker.observe(
-        e.candidates(1.05, widthFraction: 0.6, plateSide: -0.25),
-        prior: 40,
-      );
+      feed(1.05, (-0.1, 0.2));
     }
     expect(tracker.azimuth!.abs(), lessThan(25));
+  });
+
+  test('the plate picks the corner, front from rear included', () {
+    final e = estimator();
+    for (final az in [40.0, -40.0, 140.0, -140.0]) {
+      final view = OrbitView(azimuth: az, distance: 5, viewport: viewport);
+      final b = renderer.bounds(view);
+      final front = az.abs() < 90;
+      final p = renderer.project(
+        view,
+        front ? 2.02 : -1.96,
+        front ? -0.04 : -0.09,
+        front ? 0.44 : 0.715,
+      );
+      final got = e.read(
+        b.width / b.height,
+        widthFraction: b.width / viewport.width,
+        plate: ((p.dx - b.center.dx) / b.width, (b.bottom - p.dy) / b.height),
+      );
+      final best = got.reduce((a, c) => c.weight > a.weight ? c : a);
+      expect(wrapDegrees(best.azimuth - az).abs(), lessThan(3), reason: '$got');
+      for (final c in got) {
+        if (c != best) expect(c.weight, lessThan(0.1), reason: '$got');
+      }
+    }
+  });
+
+  test('a box side-on reads vaguer than one at a corner', () {
+    final e = estimator();
+    double sigmaAt(double az) {
+      final b = renderer.bounds(view(az, distance: 5));
+      final got = e.read(
+        b.width / b.height,
+        widthFraction: b.width / viewport.width,
+      );
+      return got
+          .reduce(
+            (a, c) =>
+                wrapDegrees(c.azimuth - az).abs() <
+                    wrapDegrees(a.azimuth - az).abs()
+                ? c
+                : a,
+          )
+          .sigma;
+    }
+
+    // side-on the box is at its flattest and hardly changes as you move
+    expect(sigmaAt(88), greaterThan(sigmaAt(40) * 2));
   });
 
   test('the plate side keeps only the right pair of corners', () {

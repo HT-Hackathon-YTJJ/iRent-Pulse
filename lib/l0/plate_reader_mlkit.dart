@@ -82,7 +82,9 @@ class PlateReader {
               (
                 text: line.text,
                 left: line.boundingBox.left,
+                top: line.boundingBox.top,
                 right: line.boundingBox.right,
+                bottom: line.boundingBox.bottom,
               ),
         ],
       );

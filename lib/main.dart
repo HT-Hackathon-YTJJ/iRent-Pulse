@@ -5,6 +5,7 @@ import 'config/map_config.dart';
 import 'design/tokens.dart';
 import 'screens/home_map_screen.dart';
 import 'screens/order_detail_screen.dart';
+import 'services/demo_switches.dart';
 import 'services/notifications.dart';
 import 'services/trip_state.dart';
 
@@ -19,6 +20,7 @@ Future<void> main() async {
   // 讀在 runApp 之前：租用中的話第一幀就要是「行駛中」，不能先閃一下地圖首頁
   // 再把 Sheet 疊上去。
   final resumed = await TripStore.load();
+  await DemoSwitches.load();
   runApp(IRentPulseApp(resumedTrip: resumed));
 }
 

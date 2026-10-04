@@ -42,12 +42,30 @@ class CaptureSession extends ChangeNotifier {
   CaptureSession({
     AimThresholds thresholds = const AimThresholds(),
     this.expectedPlate = '',
+    this._plateCheck = true,
   }) : _evaluator = AimEvaluator(base: thresholds),
        _plates = PlateWatcher(expected: expectedPlate);
 
   /// The plate on the rental agreement. Empty switches the 車牌比對 off, which
   /// is what a scripted demo run or a widget test wants.
   final String expectedPlate;
+
+  /// Whether a plate that is not [expectedPlate] holds the shot back.
+  ///
+  /// A switch for demos: at an event the car on the floor is rarely the one
+  /// on the rental agreement, and every corner came up 車輛不符. Off, the
+  /// reader keeps running — the turning outline still uses where the plate
+  /// is — but what it reads is never compared, live or on the filed photo.
+  bool get plateCheck => _plateCheck;
+  bool _plateCheck;
+  set plateCheck(bool on) {
+    if (on == _plateCheck) return;
+    _plateCheck = on;
+    _plates.restart();
+    notifyListeners();
+  }
+
+  bool get _comparingPlates => _plateCheck && expectedPlate.isNotEmpty;
 
   final AimEvaluator _evaluator;
   final PlateWatcher _plates;
@@ -85,12 +103,24 @@ class CaptureSession extends ChangeNotifier {
   DateTime _lastDetection = DateTime.fromMillisecondsSinceEpoch(0);
   DateTime _lastPlateRead = DateTime.fromMillisecondsSinceEpoch(0);
 
-  /// Where across the frame the last plate-shaped line was read, in the same
-  /// upright normalised coordinates as the car box, and when.
+  /// Where in the car's box the last plate-shaped line was read — across
+  /// from the box's centre as a fraction of its width, up from its bottom as
+  /// a fraction of its height — and when.
   ///
-  /// The orbit guide uses it as a compass: which side of the car's box the
-  /// plate is on says which pair of corners the driver is standing at.
-  ({double x, DateTime at})? plateSighting;
+  /// The orbit guide uses it as a compass: which side of the box the plate is
+  /// on says which pair of corners the driver is standing at, and how high up
+  /// it is says whether that is the front or the back. Relative to the box
+  /// rather than the frame, so it still lines up with the next box after the
+  /// phone has moved.
+  ({double across, double up, DateTime at})? plateSighting;
+
+  /// The detector's last box, unsmoothed, and when its frame arrived.
+  ///
+  /// The verdict's [AimVerdict.carBox] is smoothed over several detections,
+  /// which is right for the badge and wrong for the orbit guide: it pairs
+  /// each box with the heading the phone had when the frame was taken, and a
+  /// box that is partly the last three frames belongs to no single heading.
+  ({Rect box, DateTime at})? lastDetection;
   int _darkFrames = 0;
   int _brightFrames = 0;
 
@@ -124,6 +154,10 @@ class CaptureSession extends ChangeNotifier {
   /// they cost microseconds — but inference is the expensive part and a car
   /// does not move between two consecutive frames.
   static const Duration _detectInterval = Duration(milliseconds: 200);
+
+  /// Boxes below this are left out of [lastDetection]: the orbit guide reads
+  /// an angle off the box's shape, and a doubtful box has a doubtful shape.
+  static const double _orbitMinScore = 0.4;
 
   /// Read the plate about 1.5 times a second.
   ///
@@ -232,7 +266,10 @@ class CaptureSession extends ChangeNotifier {
       _detector = await CarDetector.load();
       // Best effort, exactly like the detector: a phone that cannot load the
       // recogniser keeps every other L0 check and simply never mentions plates.
-      if (expectedPlate.isNotEmpty) _plateReader = await PlateReader.load();
+      //
+      // Loaded even with no plate to compare against: where the plate is in
+      // the frame is what tells the turning outline which corner it is at.
+      _plateReader = await PlateReader.load();
       if (_logPlates) {
         debugPrint(
           'L0 車牌: reader=${_plateReader == null ? "無" : "就緒"} '
@@ -360,7 +397,11 @@ class CaptureSession extends ChangeNotifier {
           pixels,
           _controller?.description.sensorOrientation ?? 90,
           0.3, // keep low-confidence boxes; the threshold lives in the evaluator
+          prefer: _evaluator.boxAt(now),
         );
+        if (fresh != null && fresh.score >= _orbitMinScore) {
+          lastDetection = (box: fresh.box, at: now);
+        }
       }
 
       _maybeReadPlate(pixels, now);
@@ -370,8 +411,8 @@ class CaptureSession extends ChangeNotifier {
         car: fresh,
         detectorAvailable: detector != null,
         requireGuide: _requireGuide,
-        plate: _plates.state,
-        plateSeen: _plates.lastSeen,
+        plate: _comparingPlates ? _plates.state : PlateMatch.unknown,
+        plateSeen: _comparingPlates ? _plates.lastSeen : null,
         now: now,
       );
       notifyListeners();
@@ -428,11 +469,14 @@ class CaptureSession extends ChangeNotifier {
       reader.read(luma, outW, outH).then((reading) {
         if (_disposed) return;
         final text = reading?.text;
-        _plates.observe(text);
-        final centre = reading?.plateCentre(outW.toDouble());
-        if (centre != null) {
+        if (_comparingPlates) _plates.observe(text);
+        final spot = reading?.plateSpot(outW.toDouble(), outH.toDouble());
+        if (spot != null) {
+          final x = region.left + spot.x * region.width;
+          final y = region.top + spot.y * region.height;
           plateSighting = (
-            x: region.left + centre * region.width,
+            across: (x - box.center.dx) / box.width,
+            up: (box.bottom - y) / box.height,
             at: DateTime.now(),
           );
         }
@@ -471,14 +515,14 @@ class CaptureSession extends ChangeNotifier {
     _torchOn = on;
     _darkFrames = 0;
     _brightFrames = 0;
-    controller
-        .setFlashMode(on ? FlashMode.torch : FlashMode.off)
-        .catchError((Object error) {
-          // Some devices refuse the torch while streaming; a photo without it
-          // is still a photo.
-          debugPrint('L0: 閃光燈切換失敗 — $error');
-          _torchOn = !on;
-        });
+    controller.setFlashMode(on ? FlashMode.torch : FlashMode.off).catchError((
+      Object error,
+    ) {
+      // Some devices refuse the torch while streaming; a photo without it
+      // is still a photo.
+      debugPrint('L0: 閃光燈切換失敗 — $error');
+      _torchOn = !on;
+    });
   }
 
   /// The flash button. From here on the driver owns the torch.
@@ -524,7 +568,7 @@ class CaptureSession extends ChangeNotifier {
   /// Same asymmetry as everywhere else in L0: anything short of a plate read
   /// clearly as *another* car comes back [PlateMatch.unknown] and says nothing.
   Future<PlateMatch> matchShot(File photo) async {
-    if (expectedPlate.isEmpty) return PlateMatch.unknown;
+    if (!_comparingPlates) return PlateMatch.unknown;
     var reader = _plateReader;
     if (reader == null) {
       reader = await PlateReader.load();

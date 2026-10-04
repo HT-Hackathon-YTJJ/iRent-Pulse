@@ -1,3 +1,5 @@
+import 'dart:ui' show Rect;
+
 import 'package:flutter/foundation.dart';
 
 import 'detection.dart';
@@ -27,8 +29,12 @@ class CarDetector {
 
   bool get available => false;
 
-  Detection? detect(FramePixels pixels, int rotationDegrees, double minScore) =>
-      null;
+  Detection? detect(
+    FramePixels pixels,
+    int rotationDegrees,
+    double minScore, {
+    Rect? prefer,
+  }) => null;
 
   void dispose() {}
 }

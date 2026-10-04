@@ -1,6 +1,6 @@
 import 'dart:math' as math;
 import 'dart:typed_data';
-import 'dart:ui' show Rect, Size;
+import 'dart:ui' show Offset, Rect, Size;
 
 import 'car_model.dart';
 
@@ -173,6 +173,18 @@ class OutlineRenderer {
       _sx[i] = _cx + _focal * xc * inv;
       _sy[i] = _cy - _focal * yc * inv;
     }
+  }
+
+  /// Where the point (x, y, z) of the car — metres, x forward, y left, z up —
+  /// lands in [view].
+  Offset project(OrbitView view, double x, double y, double z) {
+    _setCamera(view);
+    final dx = x - _ex, dy = y - _ey, dz = z - _ez;
+    final zc = math.max(_near, dx * _fx + dy * _fy + dz * _fz);
+    return Offset(
+      _cx + _focal * (dx * _rx + dy * _ry + dz * _rz) / zc,
+      _cy - _focal * (dx * _ux + dy * _uy + dz * _uz) / zc,
+    );
   }
 
   /// Where the car lands in [view], without drawing anything.
@@ -463,7 +475,8 @@ class OutlineRenderer {
     }
   }
 
-  /// The car's box — how wide in the frame, and what shape — for every
+  /// The car's box — how wide in the frame, what shape, how far its centre
+  /// sits from the car's middle, and where the plate is in it — for every
   /// [step] degrees of azimuth at each of [PoseTable.distances]. What the
   /// detector's box is matched against to read the angle off it.
   PoseTable poseTable(OrbitView view, {double step = 2}) {
@@ -471,16 +484,58 @@ class OutlineRenderer {
     final d = PoseTable.distances;
     final width = Float64List(n * d.length);
     final aspect = Float64List(n * d.length);
+    final centre = Float64List(n * d.length);
+    final plateX = Float64List(n * d.length);
+    final plateUp = Float64List(n * d.length);
+    final front = _centroid('front_plate');
+    final rear = _centroid('rear_plate');
     for (var i = 0; i < n; i++) {
+      final az = -180 + i * step;
+      final c = math.cos(az * math.pi / 180);
+      // Only the end facing the camera, and only while it faces it enough to
+      // be read: past ±80° the plate is edge-on.
+      final plate = c > 0.17 ? front : (c < -0.17 ? rear : null);
       for (var j = 0; j < d.length; j++) {
-        final b = bounds(
-          view.copyWith(azimuth: -180 + i * step, distance: d[j]),
-        );
-        width[i * d.length + j] = b.width / view.viewport.width;
-        aspect[i * d.length + j] = b.width / b.height;
+        final v = view.copyWith(azimuth: az, distance: d[j]);
+        final b = bounds(v);
+        final k = i * d.length + j;
+        width[k] = b.width / view.viewport.width;
+        aspect[k] = b.width / b.height;
+        // The camera looks at the car's middle, so the image centre is the
+        // middle's direction and the box centre is this far round from it.
+        centre[k] = -math.atan((b.center.dx - _cx) / _focal) * 180 / math.pi;
+        if (plate == null) {
+          plateX[k] = double.nan;
+          plateUp[k] = double.nan;
+        } else {
+          final p = project(v, plate.$1, plate.$2, plate.$3);
+          plateX[k] = (p.dx - b.center.dx) / b.width;
+          plateUp[k] = (b.bottom - p.dy) / b.height;
+        }
       }
     }
-    return PoseTable(step: step, width: width, aspect: aspect);
+    return PoseTable(
+      step: step,
+      width: width,
+      aspect: aspect,
+      centre: centre,
+      plateX: plateX,
+      plateUp: plateUp,
+    );
+  }
+
+  (double, double, double)? _centroid(String name) {
+    for (final line in model.lines) {
+      if (line.name != name || line.length == 0) continue;
+      var x = 0.0, y = 0.0, z = 0.0;
+      for (var i = 0; i < line.length; i++) {
+        x += line.points[i * 3];
+        y += line.points[i * 3 + 1];
+        z += line.points[i * 3 + 2];
+      }
+      return (x / line.length, y / line.length, z / line.length);
+    }
+    return null;
   }
 }
 
@@ -493,7 +548,14 @@ class OutlineRenderer {
 /// *width in the frame* says how far back the driver is, so the shape is only
 /// compared against what the model looks like from that distance.
 class PoseTable {
-  PoseTable({required this.step, required this.width, required this.aspect});
+  PoseTable({
+    required this.step,
+    required this.width,
+    required this.aspect,
+    required this.centre,
+    required this.plateX,
+    required this.plateUp,
+  });
 
   /// Metres. Denser near the car, where a step changes the view most.
   static const List<double> distances = [
@@ -519,23 +581,53 @@ class PoseTable {
   /// Box width ÷ height, [azimuth][distance].
   final Float64List aspect;
 
+  /// Degrees from the car's middle round to the box's centre, anticlockwise.
+  /// At a corner the near end looms, so the box sits ~4° towards it at 5 m.
+  final Float64List centre;
+
+  /// Where the plate facing the camera sits in the box: across from the
+  /// box's centre as a fraction of its width, and up from its bottom as a
+  /// fraction of its height. NaN when no plate faces the camera.
+  final Float64List plateX;
+  final Float64List plateUp;
+
   int get azimuths => width.length ~/ distances.length;
+
+  /// Azimuth at index [i].
+  double azimuthAt(int i) => -180 + i * step;
 
   /// The box aspect the model predicts at azimuth index [i] for a box
   /// [widthFraction] of the frame wide.
-  double aspectFor(int i, double widthFraction) {
+  double aspectFor(int i, double widthFraction) =>
+      _at(aspect, i, widthFraction);
+
+  /// [centre] at azimuth index [i] for a box [widthFraction] wide.
+  double centreFor(int i, double widthFraction) =>
+      _at(centre, i, widthFraction);
+
+  /// [plateX], [plateUp] at azimuth index [i], or null if no plate faces the
+  /// camera from there.
+  (double, double)? plateFor(int i, double widthFraction) {
+    final x = _at(plateX, i, widthFraction);
+    if (x.isNaN) return null;
+    return (x, _at(plateUp, i, widthFraction));
+  }
+
+  /// [values] at azimuth index [i], interpolated between the two distances
+  /// whose box is [widthFraction] wide. Width falls as distance grows; clamp
+  /// outside the table.
+  double _at(Float64List values, int i, double widthFraction) {
     final n = distances.length;
     final base = i * n;
-    // Width falls as distance grows; clamp outside the table.
-    if (widthFraction >= width[base]) return aspect[base];
-    if (widthFraction <= width[base + n - 1]) return aspect[base + n - 1];
+    if (widthFraction >= width[base]) return values[base];
+    if (widthFraction <= width[base + n - 1]) return values[base + n - 1];
     for (var j = 0; j < n - 1; j++) {
       final w0 = width[base + j], w1 = width[base + j + 1];
       if (widthFraction <= w0 && widthFraction >= w1) {
         final t = (w0 - widthFraction) / (w0 - w1);
-        return aspect[base + j] + (aspect[base + j + 1] - aspect[base + j]) * t;
+        return values[base + j] + (values[base + j + 1] - values[base + j]) * t;
       }
     }
-    return aspect[base + n - 1];
+    return values[base + n - 1];
   }
 }

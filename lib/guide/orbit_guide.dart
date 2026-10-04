@@ -19,12 +19,14 @@ import 'outline_renderer.dart';
 /// the size of the preview and which corner it is shooting; it answers with
 /// an outline, the box L0 should score against, and how far off the angle is.
 class OrbitGuide extends ChangeNotifier {
-  OrbitGuide({this.useGyroscope = true});
+  OrbitGuide({HeadingTracker? heading, this.startSensors = true})
+    : heading = heading ?? HeadingTracker();
 
-  final bool useGyroscope;
+  /// False in tests, which [HeadingTracker.feed] the heading themselves.
+  final bool startSensors;
 
   final OrbitTracker tracker = OrbitTracker();
-  final HeadingTracker heading = HeadingTracker();
+  final HeadingTracker heading;
 
   CarModel? _model;
   OutlineRenderer? _renderer;
@@ -41,30 +43,52 @@ class OrbitGuide extends ChangeNotifier {
   BoxPoseEstimator? _pose;
   String _configKey = '';
 
+  /// The tracker's clock: seconds since this guide was made.
+  final DateTime _epoch = DateTime.now();
+  double _seconds(DateTime t) => t.difference(_epoch).inMicroseconds / 1e6;
+
   /// Angle, in degrees either side of the target, that counts as "there".
   static const double tolerance = 10;
 
   /// Detector box aspect ÷ model box aspect, measured. See [observeBox].
   static const double detectorAspectBias = 1.044;
 
+  /// From the sensor exposing a frame to the frame reaching Dart. The box
+  /// is where the car was then, so that is the heading it is paired with.
+  static const Duration frameLatency = Duration(milliseconds: 70);
+
+  /// Above this the phone is being swung, not aimed: the frame is smeared
+  /// and a few milliseconds of timing error is degrees of bearing.
+  static const double maxTurnRate = 50;
+
   Future<void> load() async {
     try {
-      final model = await CarModel.load();
-      _model = model;
-      _renderer = OutlineRenderer(model);
-      _configKey = '';
-      if (useGyroscope) {
-        heading.addListener(_onHeading);
-        heading.start();
-      }
-      notifyListeners();
+      attach(await CarModel.load());
     } catch (error) {
       loadError = error;
       debugPrint('Orbit: 輪廓模型載入失敗 — $error');
     }
   }
 
-  void _onHeading() => tracker.updateYaw(heading.yaw);
+  /// Use [model], already loaded.
+  @visibleForTesting
+  void attach(CarModel model) {
+    _model = model;
+    _renderer = OutlineRenderer(model);
+    _configKey = '';
+    heading.addListener(_onHeading);
+    if (startSensors) heading.start();
+    notifyListeners();
+  }
+
+  void _onHeading() {
+    final at = heading.updatedAt;
+    tracker.updateYaw(
+      heading.yaw,
+      walking: heading.walking,
+      at: at == null ? null : _seconds(at),
+    );
+  }
 
   /// The preview the outline is drawn into, the corner being shot, and the
   /// lens zoom (which narrows the field of view).
@@ -96,16 +120,18 @@ class OrbitGuide extends ChangeNotifier {
   /// frames while it eases, and the L0 box should match what is on screen.
   double? shownAzimuth;
 
+  double get _fovY =>
+      2 *
+      math.atan(math.tan(OrbitView.defaultFovY * math.pi / 360) / _zoom) *
+      180 /
+      math.pi;
+
   OrbitView _view(double azimuth, double distance) => OrbitView(
     azimuth: azimuth,
     distance: distance,
     viewport: _viewport,
     shiftX: _shiftX,
-    fovY:
-        2 *
-        math.atan(math.tan(OrbitView.defaultFovY * math.pi / 360) / _zoom) *
-        180 /
-        math.pi,
+    fovY: _fovY,
   );
 
   /// The azimuth the driver is at, or null until something has placed them.
@@ -167,11 +193,25 @@ class OrbitGuide extends ChangeNotifier {
     );
   }
 
-  /// One detector box, in the upright normalised frame, and — when the plate
-  /// reader found a plate on this car — where across the frame it was.
-  void observeBox(Rect box, {double? plateX}) {
+  /// One detector box, unsmoothed, in the upright normalised frame; when the
+  /// frame reached Dart; and — if the plate reader found this car's plate —
+  /// where in the box it was: across from the box's centre as a fraction of
+  /// its width, and up from its bottom as a fraction of its height.
+  void observeBox(
+    Rect box, {
+    required DateTime at,
+    ({double across, double up})? plate,
+  }) {
     final pose = _pose;
     if (pose == null || _viewport.isEmpty || !boxIsWhole(box)) return;
+    final exposed = at.subtract(frameLatency);
+    if (heading.available) {
+      final rate = heading.rateAt(exposed);
+      if (rate.abs() > maxTurnRate) {
+        if (_log) debugPrint('Orbit 偵測: 轉太快 ${rate.round()}°/s，略過');
+        return;
+      }
+    }
     // COCO SSD's box stops a little short of the roof and the tyres, so it
     // comes out ~4.5% flatter than the model's own bounds: 1.048 and 1.040 on
     // the two reference photos whose cameras were solved from the wheels
@@ -181,22 +221,32 @@ class OrbitGuide extends ChangeNotifier {
         _viewport.width /
         (box.height * _viewport.height) /
         detectorAspectBias;
-    double? side;
-    if (plateX != null && plateX >= box.left && plateX <= box.right) {
-      side = (plateX - box.center.dx) / box.width;
-    }
-    final candidates = pose.candidates(
+    final candidates = pose.read(
       aspect,
       widthFraction: box.width,
-      plateSide: side,
+      plate: plate == null ? null : (plate.across, plate.up),
     );
-    tracker.observe(candidates, prior: _target);
+    // Where the box is, as a direction: the heading the frame was taken at,
+    // plus how far left of the frame's centre the box sits.
+    final focal = _viewport.height / 2 / math.tan(_fovY * math.pi / 360);
+    final look =
+        -math.atan((box.center.dx - 0.5) * _viewport.width / focal) *
+        180 /
+        math.pi;
+    tracker.observe(
+      candidates,
+      bearing: heading.yawAt(exposed) + look,
+      size: box.width,
+      at: _seconds(at),
+      prior: _target,
+    );
     if (_log) {
       debugPrint(
         'Orbit 偵測: aspect=${aspect.toStringAsFixed(2)} '
         'w=${box.width.toStringAsFixed(2)} '
-        'plate=${side?.toStringAsFixed(2) ?? "-"} '
-        '候選=${candidates.map((c) => c.round()).toList()} '
+        'plate=${plate == null ? "-" : "${plate.across.toStringAsFixed(2)},${plate.up.toStringAsFixed(2)}"} '
+        'look=${look.toStringAsFixed(1)} '
+        '候選=$candidates '
         '→ az=${tracker.azimuth?.toStringAsFixed(1) ?? "未定"}',
       );
     }
@@ -214,9 +264,10 @@ class OrbitGuide extends ChangeNotifier {
 /// The outline itself, drawn over the preview.
 ///
 /// It eases towards the tracked azimuth on every vsync rather than jumping to
-/// it: the gyroscope is smooth already, but the first fix and every
-/// re-anchor would otherwise snap the whole car round in one frame, and a
-/// guide that lurches reads as a guide that is broken.
+/// it. The tracked azimuth moves in small steps, five times a second, as the
+/// detector's readings come in, and the first fix would otherwise snap the
+/// whole car round in one frame; a guide that lurches reads as a guide that
+/// is broken.
 class OrbitOutline extends StatefulWidget {
   const OrbitOutline({super.key, required this.guide, required this.color});
 
@@ -229,6 +280,10 @@ class OrbitOutline extends StatefulWidget {
 
 class _OrbitOutlineState extends State<OrbitOutline>
     with SingleTickerProviderStateMixin {
+  /// Seconds to close 63% of the gap: long enough to blend the detector's
+  /// 5 Hz steps into one movement, short enough to keep up with a walk.
+  static const double easing = 0.14;
+
   late final Ticker _ticker = createTicker(_tick);
   double? _shown;
   Duration _last = Duration.zero;
@@ -250,7 +305,7 @@ class _OrbitOutlineState extends State<OrbitOutline>
     }
     final error = wrapDegrees(want - shown);
     if (error.abs() < 0.05) return;
-    final k = 1 - math.exp(-dt.clamp(0.0, 0.1) / 0.07);
+    final k = 1 - math.exp(-dt.clamp(0.0, 0.1) / easing);
     setState(() => _shown = wrapDegrees(shown + error * k));
   }
 

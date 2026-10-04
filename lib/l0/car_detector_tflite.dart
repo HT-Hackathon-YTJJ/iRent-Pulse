@@ -77,12 +77,25 @@ class CarDetector {
 
   bool get available => !_disposed;
 
-  /// Returns the highest-scoring vehicle, or null.
+  /// Returns the highest-scoring vehicle, or null — favouring the one that
+  /// overlaps [prefer], the car it found last time.
+  ///
+  /// In a car park the driver's car and the one in the next bay are both in
+  /// frame, and their scores trade places from one frame to the next. Taking
+  /// the top score every time made the box jump between them, and with it
+  /// the badge and the turning outline. The bonus for staying on the same car
+  /// is worth about half a score: the neighbour has to be much the clearer
+  /// of the two, or the car the box was on has to be gone.
   ///
   /// Frames that arrive while an inference is in flight are dropped rather than
   /// queued: a stale verdict is worse than a missed one when the user is
   /// actively moving the phone to satisfy it.
-  Detection? detect(FramePixels pixels, int rotationDegrees, double minScore) {
+  Detection? detect(
+    FramePixels pixels,
+    int rotationDegrees,
+    double minScore, {
+    Rect? prefer,
+  }) {
     if (_disposed || _busy) return null;
     _busy = true;
     try {
@@ -93,24 +106,24 @@ class CarDetector {
       );
 
       Detection? best;
+      var bestRank = -1.0;
       final found = _count[0].round().clamp(0, _maxDetections);
       for (var i = 0; i < found; i++) {
         final score = _scores[0][i];
         if (score < minScore) continue;
         final label = _labelAt(_classes[0][i]);
         if (!vehicleLabels.contains(label)) continue;
-        if (best != null && score <= best.score) continue;
         final b = _boxes[0][i]; // ymin, xmin, ymax, xmax, already normalised
-        best = Detection(
-          box: Rect.fromLTRB(
-            b[1].clamp(0.0, 1.0),
-            b[0].clamp(0.0, 1.0),
-            b[3].clamp(0.0, 1.0),
-            b[2].clamp(0.0, 1.0),
-          ),
-          score: score,
-          label: label,
+        final box = Rect.fromLTRB(
+          b[1].clamp(0.0, 1.0),
+          b[0].clamp(0.0, 1.0),
+          b[3].clamp(0.0, 1.0),
+          b[2].clamp(0.0, 1.0),
         );
+        final rank = score + (prefer == null ? 0 : 0.5 * _iou(box, prefer));
+        if (rank <= bestRank) continue;
+        bestRank = rank;
+        best = Detection(box: box, score: score, label: label);
       }
       return best;
     } catch (error) {
@@ -119,6 +132,13 @@ class CarDetector {
     } finally {
       _busy = false;
     }
+  }
+
+  static double _iou(Rect a, Rect b) {
+    final o = a.intersect(b);
+    if (o.width <= 0 || o.height <= 0) return 0;
+    final inter = o.width * o.height;
+    return inter / (a.width * a.height + b.width * b.height - inter);
   }
 
   /// The post-process op emits an index into the 90 real classes, while the

@@ -14,6 +14,7 @@ import '../l0/aim.dart';
 import '../l0/capture_session.dart';
 import '../l0/permissions.dart';
 import '../l0/plate.dart';
+import '../services/demo_switches.dart';
 import '../services/return_session.dart';
 
 /// The seven-slot viewfinder, and the place L0 actually runs.
@@ -159,6 +160,7 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
 
   late final CaptureSession _camera = CaptureSession(
     expectedPlate: widget.expectedPlate,
+    plateCheck: DemoSwitches.plateCheck.value,
   );
 
   /// The turning 3D outline for the four body corners.
@@ -170,9 +172,11 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
   /// `lib/guide/`.
   final OrbitGuide _orbit = OrbitGuide();
 
-  /// The last detector box handed to [_orbit], so each detection is read
-  /// once rather than on every analysed frame.
-  Rect? _lastOrbitBox;
+  /// The last detection handed to [_orbit], so each is read once rather than
+  /// on every analysed frame, and the last plate sighting, so one reading of
+  /// the plate is one vote and not five.
+  ({Rect box, DateTime at})? _lastOrbitBox;
+  DateTime? _lastOrbitPlate;
 
   /// What the rest of the screen last rebuilt for, so the gyroscope's 60 Hz
   /// only rebuilds the badge and pill when what they say changes.
@@ -350,10 +354,17 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
     _orbit.addListener(_onOrbitTick);
     _orbit.tracker.addListener(_onOrbitTick);
     unawaited(_orbit.load());
+    DemoSwitches.plateCheck.addListener(_onPlateCheck);
+  }
+
+  void _onPlateCheck() {
+    _camera.plateCheck = DemoSwitches.plateCheck.value;
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
+    DemoSwitches.plateCheck.removeListener(_onPlateCheck);
     _orbit.removeListener(_onOrbitTick);
     _orbit.tracker.removeListener(_onOrbitTick);
     _orbit.dispose();
@@ -378,18 +389,24 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
     _feedOrbit();
   }
 
-  /// Hand each new detection to the orbit guide — the box's shape, and which
-  /// side of it the plate was read on if that was recent.
+  /// Hand each new detection to the orbit guide — the box, when its frame
+  /// was taken, and where in it the plate was read if that was just now.
   void _feedOrbit() {
     if (!_orbitOn || _frozen) return;
-    final box = _camera.verdict.carBox;
-    if (box == null || identical(box, _lastOrbitBox)) return;
-    _lastOrbitBox = box;
+    final detection = _camera.lastDetection;
+    if (detection == null || identical(detection, _lastOrbitBox)) return;
+    _lastOrbitBox = detection;
     final plate = _camera.plateSighting;
     final fresh =
         plate != null &&
-        DateTime.now().difference(plate.at) < const Duration(seconds: 2);
-    _orbit.observeBox(box, plateX: fresh ? plate.x : null);
+        plate.at != _lastOrbitPlate &&
+        detection.at.difference(plate.at).abs() < const Duration(seconds: 1);
+    if (fresh) _lastOrbitPlate = plate.at;
+    _orbit.observeBox(
+      detection.box,
+      at: detection.at,
+      plate: fresh ? (across: plate.across, up: plate.up) : null,
+    );
   }
 
   void _onOrbitTick() {
@@ -872,6 +889,16 @@ class _ReturnCaptureScreenState extends State<ReturnCaptureScreen>
               subtitle: spot.instruction,
               onBack: widget.onExit,
               onLongPressTitle: widget.onLongPressTitle,
+              // Only where it does anything: the corners are the only shots
+              // with a plate in them, and only a rental has a plate to check.
+              trailing: spot.isCorner && widget.expectedPlate.isNotEmpty
+                  ? _PlateCheckChip(
+                      on: _camera.plateCheck,
+                      onTap: () => unawaited(
+                        DemoSwitches.setPlateCheck(!_camera.plateCheck),
+                      ),
+                    )
+                  : null,
             ),
           ),
 
@@ -1200,12 +1227,16 @@ class _TopBar extends StatelessWidget {
     required this.subtitle,
     required this.onBack,
     this.onLongPressTitle,
+    this.trailing,
   });
 
   final String title;
   final String subtitle;
   final VoidCallback onBack;
   final VoidCallback? onLongPressTitle;
+
+  /// Opposite the back arrow.
+  final Widget? trailing;
 
   @override
   Widget build(BuildContext context) {
@@ -1233,6 +1264,8 @@ class _TopBar extends StatelessWidget {
                   child: Text(title, style: ReturnText.cameraTitle),
                 ),
               ),
+              if (trailing != null)
+                Positioned(right: 12, top: 0, bottom: 0, child: trailing!),
             ],
           ),
         ),
@@ -1475,6 +1508,68 @@ class _AimBadge extends StatelessWidget {
         borderRadius: BorderRadius.circular(8.81),
       ),
       child: Text(state.label, style: ReturnText.cameraBadge),
+    );
+  }
+}
+
+/// 車牌比對 on or off, in the corner of the top bar.
+///
+/// For demos: the car on a show floor is rarely the one on the rental, and
+/// with the check on every corner came back 車輛不符. Small and out of the way
+/// because a driver should never need it — it says what it does, and what
+/// state it is in, in four characters and a dot.
+class _PlateCheckChip extends StatelessWidget {
+  const _PlateCheckChip({required this.on, required this.onTap});
+
+  final bool on;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      toggled: on,
+      label: '車牌比對',
+      child: GestureDetector(
+        onTap: onTap,
+        behavior: HitTestBehavior.opaque,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          height: 24,
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          decoration: BoxDecoration(
+            color: on ? const Color(0x33FFFFFF) : const Color(0x14FFFFFF),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: on ? const Color(0x66FFFFFF) : const Color(0x33FFFFFF),
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 180),
+                width: 7,
+                height: 7,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: on ? const Color(0xFF3CCF82) : const Color(0x80FFFFFF),
+                ),
+              ),
+              const SizedBox(width: 5),
+              Text(
+                on ? '車牌比對' : '車牌比對關',
+                style: TextStyle(
+                  fontSize: 12,
+                  height: 1,
+                  fontWeight: FontWeight.w500,
+                  color: on ? Colors.white : const Color(0x99FFFFFF),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

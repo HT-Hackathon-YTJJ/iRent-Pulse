@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:irent_pulse/data/return_inspection.dart';
 import 'package:irent_pulse/screens/return_capture_screen.dart';
+import 'package:irent_pulse/services/demo_switches.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// There is no camera plugin behind a widget test, so every pump here exercises
 /// the fallback the screen has to survive on a desktop, on the web, and after a
@@ -234,6 +236,53 @@ void main() {
     await tester.tap(find.text('仍要送出'));
     await tester.pump(const Duration(milliseconds: 300));
     expect(finished, 1);
+    await tester.pump(const Duration(seconds: 1));
+  });
+
+  testWidgets('the 車牌比對 switch is on the corners and remembers itself', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    DemoSwitches.plateCheck.value = true;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ReturnCaptureScreen(
+          spots: CaptureSpot.values,
+          taken: const {},
+          pending: CaptureSpot.values.toSet(),
+          expectedPlate: 'RDS-6583',
+          onFinished: () {},
+          onExit: () {},
+        ),
+      ),
+    );
+    await tester.pump();
+
+    // 加油卡 has no plate in it, so no switch either
+    expect(find.textContaining('車牌比對'), findsNothing);
+
+    await tester.tap(
+      find
+          .ancestor(
+            of: slotIcon(CaptureSpot.frontLeft),
+            matching: find.byType(GestureDetector),
+          )
+          .first,
+    );
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('車牌比對'), findsOneWidget);
+
+    await tester.tap(find.text('車牌比對'));
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 20)),
+    );
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(find.text('車牌比對關'), findsOneWidget);
+    expect(DemoSwitches.plateCheck.value, isFalse);
+    final prefs = await tester.runAsync(SharedPreferences.getInstance);
+    expect(prefs!.getBool('demo.plate_check'), isFalse);
+
+    DemoSwitches.plateCheck.value = true;
     await tester.pump(const Duration(seconds: 1));
   });
 }
