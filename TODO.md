@@ -233,8 +233,21 @@ L0 車牌: 720x600 ocr=ABC-1234 候選=[A8C1234] → mismatch
       3D 輪廓，鏡頭看到整台車就自動判斷站在哪個角，陀螺儀接手；只有鏡頭能定位，
       沒有手動拖曳。`pubspec.yaml` 同時升到 `1.3.0+4`（arm64 的 versionCode 是 2004）
 
-**下一版要記得**：`version:` 現在是 `1.3.0+4`。再發版之前要再往上加一次，
-不然兩個版本的 versionCode 一樣，Android 不會讓你蓋上去。
+- [x] **2026-10-10** 改名 **iRent iTrust**，開了 GitHub Release `v2.0.0`（Android）
+      並第一次上 **TestFlight**（iOS）：
+      - 套件／Bundle ID 改成 `com.irentitrust.app`，Android 會被當成另一個 App
+      - 後端換成新的 Fly App `irent-itrust-api`；舊的 `irent-pulse-api` 還開著給 1.x，
+        確定沒人用了再 `flyctl apps destroy irent-pulse-api`
+      - App Store Connect：App ID 6821268978。內部群組「團隊內部」（自動分發每個
+        build）；外部群組「公開測試」公開連結 <https://testflight.apple.com/join/XzGu4D5b>，
+        build 6 送 Beta 審核中。build 7 只多了 `NSLocationAlwaysAndWhenInUseUsageDescription`
+        （ITMS-90683 警告），核准後把 build 7 也加進「公開測試」
+      - iOS 上傳：`flutter build ipa` 後用 `xcodebuild -exportArchive`（destination=upload、
+        `-allowProvisioningUpdates`），走 Xcode 登入的帳號，不需要 API key
+      - `pubspec.yaml` 是 `2.0.0+7`（Android Release 的 APK 是 +6 建的，versionCode 2006）
+
+**下一版要記得**：`version:` 現在是 `2.0.0+7`。再發版之前要再往上加一次——
+iOS 的 build number 不能重複，Android 的 versionCode 一樣才不會讓你蓋上去。
 
 - [x] **2026-10-04** 四角輪廓「會亂轉、對不到」：站著轉手機對焦時輪廓會跟著轉
       （只用陀螺儀朝向），沒讀到車牌時鏡像全靠「這格要拍哪」猜，隔壁車的框也會
