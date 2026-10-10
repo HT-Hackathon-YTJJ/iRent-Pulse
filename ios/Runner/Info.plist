@@ -7,6 +7,10 @@
 	<string>拍攝還車照片，並在拍攝當下即時檢查構圖、清晰度與光線。</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>標記取車與還車的位置，並在地圖上顯示附近的站點。</string>
+	<!-- App 只要求「使用期間」定位；這條是因為定位套件的程式碼裡引用了「永遠」的 API，
+	     少了它上傳 TestFlight 會收到 ITMS-90683 警告。 -->
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>標記取車與還車的位置，並在地圖上顯示附近的站點。App 只會在使用期間取得位置。</string>
 	<!-- api/ 在 demo 時跑本機明文 HTTP；正式環境改用 HTTPS 後可整段移除。 -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
