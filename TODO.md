@@ -236,8 +236,8 @@ L0 車牌: 720x600 ocr=ABC-1234 候選=[A8C1234] → mismatch
 - [x] **2026-10-10** 改名 **iRent iTrust**，開了 GitHub Release `v2.0.0`（Android）
       並第一次上 **TestFlight**（iOS）：
       - 套件／Bundle ID 改成 `com.irentitrust.app`，Android 會被當成另一個 App
-      - 後端換成新的 Fly App `irent-itrust-api`；舊的 `irent-pulse-api` 還開著給 1.x，
-        確定沒人用了再 `flyctl apps destroy irent-pulse-api`
+      - 後端換成新的 Fly App `irent-itrust-api`；舊的 `irent-pulse-api` 已在同一天刪除，
+        1.x 的 App 連不到後端，只剩腳本情境
       - App Store Connect：App ID 6821268978。內部群組「團隊內部」（自動分發每個
         build）；外部群組「公開測試」公開連結 <https://testflight.apple.com/join/XzGu4D5b>，
         build 6 送 Beta 審核中。build 7 只多了 `NSLocationAlwaysAndWhenInUseUsageDescription`

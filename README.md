@@ -6,6 +6,45 @@
 以 Flutter 復刻 iRent App 的主要頁面，並在其上做出提案中的改善功能，當作可以實際
 拿在手上操作的 Prototype。（專案原名 iRent Pulse，2026-10 改名。）
 
+![從使用者旅程地圖找出四個關鍵時刻：AI 智能三審、拍照防呆、優良駕駛等級、安心上路輔助](docs/images/overview.jpg)
+
+## 功能一覽
+
+### 1. AI 智能三審——拍完就走，費用一律由人定案
+
+手機端即時對位 → 雲端 VLM 約 7 秒快篩 → 有疑慮的少數才離線比對、交給人工客服。
+上一趟留下的痕跡不會算到你頭上，你也不用自己想到要存證。
+
+![AI 智能三審：手機端即時對位引導、分層服務分流、人工客服定案](docs/images/ai-review.jpg)
+
+### 2. 拍照防呆——一次拍對，不必補拍
+
+畫面上的 3D 車身輪廓跟著你繞車轉：未對準時告訴你往哪走、接近時告訴你哪裡不對，
+對準了輪廓變綠、快門亮起。在手機上跑，不需要網路、不會卡住還車。
+
+![拍照防呆：未對準、接近、已對準三段提示](docs/images/photo-guide.jpg)
+
+### 3. 優良駕駛等級——用加分取代扣分
+
+準時還車、一次拍好、保持整潔都會累積信用分數，200 分升 PRO、300 分升訂閱制+，
+每月領點數獎勵金。上一位駕駛留下的傷痕不會讓你被牽連。
+
+![優良駕駛等級：信用分數規則與會員權益](docs/images/credit-score.jpg)
+
+### 4. 安心上路輔助——陌生車款也能放心開
+
+依配到的車自動載入專屬指引：發動與排檔、燈光雨刷、加油孔位置都有圖解，
+從取車陪到還車。
+
+![安心上路輔助：依配車自動載入的車款指引](docs/images/safe-drive.jpg)
+
+### 系統架構
+
+L0 手機端防呆 → L1 雲端快篩 → L2 取還車比對 → L3 人工決策派工，每一層都在減少下一層的
+工作量；約 85–90% 的還車在現場就直接放行。
+
+![AI 智能三審系統架構圖與 L1 快篩模型驗證數據](docs/images/architecture.jpg)
+
 > **給閱讀這個 repo 的 AI／新成員**：這不是要上線的產品，而是黑客松 Demo。真的
 > 落地時功能會搬進 iRent 自己的 App，這個 Flutter 專案不會延續——所以取捨一律以
 > 「評審看得懂、摸得到」為優先，不追求可重用性或永續架構。下面「黑客松提案」一節
@@ -18,8 +57,8 @@
 | iOS | 用 iPhone 開 TestFlight 公開連結 <https://testflight.apple.com/join/XzGu4D5b>，先裝 TestFlight App 再按「接受」（2026-10-10 送審，Apple 核准前連結還不能加入） |
 | Android | [GitHub Releases](https://github.com/HT-Hackathon-YTJJ/iRent-iTrust/releases/latest) 下載 `arm64-v8a` 的 APK（舊手機或裝不起來再用 `universal`） |
 
-> 2.0.0 起套件名稱改成 `com.irentitrust.app`，Android 會被當成**另一個 App** 安裝，
-> 舊的「iRent Pulse」可以直接移除。
+> 2.0.0 起套件名稱改成 `com.irentitrust.app`，Android 會被當成**另一個 App** 安裝。
+> 舊的「iRent Pulse」連的後端已經關掉（只剩腳本情境能跑），請直接移除。
 
 ---
 
