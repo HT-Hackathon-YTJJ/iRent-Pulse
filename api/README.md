@@ -1,4 +1,4 @@
-# iRent Pulse — 車況分層檢測 API
+# iRent iTrust — 車況分層檢測 API
 
 `docs/return-car-docs/分層規格書_v1.md` 的 **L1／L2／L3** 伺服器端實作。
 L0 在手機上（`lib/l0/`），這裡不碰。

@@ -1,11 +1,11 @@
-# iRent Pulse 車況檢測 API — Fly.io 部署設定。
+# iRent iTrust 車況檢測 API — Fly.io 部署設定。
 #
 # 部署：tool/deploy_fly.sh
 #
 # 機器閒置就停機（auto_stop_machines），第一個請求再喚醒——Fly 的喚醒是 VM
 # resume，約一到兩秒，跟 Render 免費方案動輒 50 秒的冷啟不是同一件事。代價是
 # App 探測 /healthz 的 timeout 要留得夠寬，見 InspectionApi.reachable。
-app = 'irent-pulse-api'
+app = 'irent-itrust-api'
 primary_region = 'nrt'
 
 [build]

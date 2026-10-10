@@ -1,8 +1,8 @@
-# iRent Pulse — Design Token 規格
+# iRent iTrust — Design Token 規格
 
 > **來源**：[`Tinghedy/irent-car-scan`](https://github.com/Tinghedy/irent-car-scan)（Vite + React + Tailwind 的「取還車」六頁流程原型），其 token 定義於 `src/tokens/tokens.css` 與 `tailwind.config.js`，並對映 Figma Design System（file `VA4ZaoUproMywy5bGoFC9w`）。
 >
-> **本文件的用途**：來源專案的 token 是以 CSS 變數 + Tailwind class 表達，綁定 Web 技術棧。本文件把同一套設計決策**抽象成與平台無關的語意規格**，供 iRent Pulse（Flutter）實作時對照，避免直接照抄 Tailwind class 名或 CSS 變數。
+> **本文件的用途**：來源專案的 token 是以 CSS 變數 + Tailwind class 表達，綁定 Web 技術棧。本文件把同一套設計決策**抽象成與平台無關的語意規格**，供 iRent iTrust（Flutter）實作時對照，避免直接照抄 Tailwind class 名或 CSS 變數。
 >
 > **狀態**：規格文件，尚未有對應的 Dart 實作。附錄 D 提供落地骨架建議。
 

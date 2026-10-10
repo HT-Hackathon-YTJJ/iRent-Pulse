@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:irent_pulse/data/return_inspection.dart';
-import 'package:irent_pulse/screens/return_capture_screen.dart';
-import 'package:irent_pulse/services/demo_switches.dart';
+import 'package:irent_itrust/data/return_inspection.dart';
+import 'package:irent_itrust/screens/return_capture_screen.dart';
+import 'package:irent_itrust/services/demo_switches.dart';
 
 /// Opens the viewfinder straight on the four body corners, so the orbit
 /// outline can be worked on without walking the app — map, trip, 還車 — to

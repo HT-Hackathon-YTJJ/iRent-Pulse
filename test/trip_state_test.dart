@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:irent_pulse/services/trip_state.dart';
+import 'package:irent_itrust/services/trip_state.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// A rental has to survive the app being killed.

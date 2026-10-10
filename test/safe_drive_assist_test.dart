@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:irent_pulse/data/vehicle.dart';
-import 'package:irent_pulse/screens/safe_drive_assist_screen.dart';
+import 'package:irent_itrust/data/vehicle.dart';
+import 'package:irent_itrust/screens/safe_drive_assist_screen.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();

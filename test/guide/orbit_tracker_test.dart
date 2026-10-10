@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:irent_pulse/guide/orbit.dart';
+import 'package:irent_itrust/guide/orbit.dart';
 
 /// Every mirror image of [az], the way a box with no plate reads.
 List<OrbitCandidate> mirrors(double az) => [

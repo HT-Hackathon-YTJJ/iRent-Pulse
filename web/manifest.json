@@ -1,11 +1,11 @@
 {
-    "name": "iRent Pulse",
-    "short_name": "iRent Pulse",
+    "name": "iRent iTrust",
+    "short_name": "iRent iTrust",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "iRent Pulse - AI 車況智能檢測與自動化健康診斷系統",
+    "description": "iRent iTrust - AI 車況智能檢測與自動化健康診斷系統",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

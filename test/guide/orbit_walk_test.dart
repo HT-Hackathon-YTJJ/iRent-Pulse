@@ -2,9 +2,9 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:irent_pulse/guide/car_model.dart';
-import 'package:irent_pulse/guide/orbit_guide.dart';
-import 'package:irent_pulse/guide/outline_renderer.dart';
+import 'package:irent_itrust/guide/car_model.dart';
+import 'package:irent_itrust/guide/orbit_guide.dart';
+import 'package:irent_itrust/guide/outline_renderer.dart';
 
 import 'walk_sim.dart';
 

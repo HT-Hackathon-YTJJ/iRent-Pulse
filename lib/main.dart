@@ -21,11 +21,11 @@ Future<void> main() async {
   // 再把 Sheet 疊上去。
   final resumed = await TripStore.load();
   await DemoSwitches.load();
-  runApp(IRentPulseApp(resumedTrip: resumed));
+  runApp(IRentITrustApp(resumedTrip: resumed));
 }
 
-class IRentPulseApp extends StatelessWidget {
-  const IRentPulseApp({super.key, this.resumedTrip});
+class IRentITrustApp extends StatelessWidget {
+  const IRentITrustApp({super.key, this.resumedTrip});
 
   /// A rental that was still running when the app was last killed.
   final ActiveTrip? resumedTrip;
@@ -63,7 +63,7 @@ class IRentPulseApp extends StatelessWidget {
     };
 
     return MaterialApp(
-      title: 'iRent Pulse',
+      title: 'iRent iTrust',
       navigatorKey: ReturnNotifications.navigatorKey,
       debugShowCheckedModeBanner: false,
       theme: base.copyWith(

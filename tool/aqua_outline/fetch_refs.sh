@@ -6,7 +6,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 mkdir -p refs
-UA="irent-pulse/1.0 (outline model reference)"
+UA="irent-itrust/1.0 (outline model reference)"
 fetch() {
   local title="$1" out="$2"
   local url

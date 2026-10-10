@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:irent_pulse/data/return_inspection.dart';
-import 'package:irent_pulse/screens/return_issues_screen.dart';
+import 'package:irent_itrust/data/return_inspection.dart';
+import 'package:irent_itrust/screens/return_issues_screen.dart';
 
 /// The 需處理 page is the one place a driver is asked to go back and do
 /// something, so what it can and cannot lose is worth pinning down: it lists

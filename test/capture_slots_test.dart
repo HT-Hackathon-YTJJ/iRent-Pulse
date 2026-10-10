@@ -1,6 +1,6 @@
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_test/flutter_test.dart';
-import 'package:irent_pulse/data/return_inspection.dart';
+import 'package:irent_itrust/data/return_inspection.dart';
 
 /// The shot list, the artwork behind it, and the bleed rules.
 ///

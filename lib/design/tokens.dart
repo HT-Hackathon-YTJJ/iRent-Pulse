@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-/// Semantic design tokens for the iRent Pulse demo.
+/// Semantic design tokens for the iRent iTrust demo.
 ///
 /// Values trace back to the Figma design system
 /// (file VA4ZaoUproMywy5bGoFC9w) and to docs/design-tokens.md.

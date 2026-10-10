@@ -1,10 +1,10 @@
 import 'dart:ui' show Rect;
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:irent_pulse/data/return_inspection.dart';
-import 'package:irent_pulse/l0/aim.dart';
-import 'package:irent_pulse/l0/car_detector.dart';
-import 'package:irent_pulse/l0/frame_analysis.dart';
+import 'package:irent_itrust/data/return_inspection.dart';
+import 'package:irent_itrust/l0/aim.dart';
+import 'package:irent_itrust/l0/car_detector.dart';
+import 'package:irent_itrust/l0/frame_analysis.dart';
 
 /// A frame built from a function, so each test states exactly what the sensor
 /// is handing over.

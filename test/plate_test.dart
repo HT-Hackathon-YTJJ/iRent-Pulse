@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:irent_pulse/l0/plate.dart';
+import 'package:irent_itrust/l0/plate.dart';
 
 /// The 車牌比對 rules.
 ///

@@ -8,7 +8,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-APP="${FLY_APP:-irent-pulse-api}"
+APP="${FLY_APP:-irent-itrust-api}"
 
 command -v flyctl >/dev/null || { echo "找不到 flyctl"; exit 1; }
 flyctl auth whoami >/dev/null 2>&1 || { echo "尚未登入，先跑 flyctl auth login"; exit 1; }

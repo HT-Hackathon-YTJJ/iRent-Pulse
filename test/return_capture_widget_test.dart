@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:irent_pulse/data/return_inspection.dart';
-import 'package:irent_pulse/screens/return_capture_screen.dart';
-import 'package:irent_pulse/services/demo_switches.dart';
+import 'package:irent_itrust/data/return_inspection.dart';
+import 'package:irent_itrust/screens/return_capture_screen.dart';
+import 'package:irent_itrust/services/demo_switches.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// There is no camera plugin behind a widget test, so every pump here exercises

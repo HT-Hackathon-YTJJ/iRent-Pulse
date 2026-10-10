@@ -1,4 +1,4 @@
-package com.irentpulse.irent_pulse
+package com.irentitrust.app
 
 import io.flutter.embedding.android.FlutterActivity
 

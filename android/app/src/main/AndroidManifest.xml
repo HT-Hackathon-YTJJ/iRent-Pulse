@@ -18,7 +18,7 @@
 
     <application
         android:networkSecurityConfig="@xml/network_security_config"
-        android:label="iRent Pulse"
+        android:label="iRent iTrust"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <!-- 金鑰由 app/build.gradle.kts 從專案根目錄的 .env 讀進來，

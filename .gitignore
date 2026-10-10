@@ -51,7 +51,7 @@ app.*.map.json
 .widget_preview/
 
 # ---------------------------------------------------------------------------
-# iRent Pulse 專案自訂規則
+# iRent iTrust 專案自訂規則
 # 註：Pods/、key.properties、*.jks、local.properties 已由 ios/.gitignore
 # 與 android/.gitignore 涵蓋，這裡不重複。
 # ---------------------------------------------------------------------------

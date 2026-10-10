@@ -179,7 +179,7 @@ L0 車牌: 720x600 ocr=ABC-1234 候選=[A8C1234] → mismatch
       線上跑的還是 9/07 的程式碼——沒有 `SlotKind.card`、沒有卡套 prompt，
       第一個 slot 會掉進「判斷車身漆面」並要求重拍。
 
-      部署後直接對 `https://irent-pulse-api.fly.dev/v1/l1/screen` 送
+      部署後直接對 `https://irent-itrust-api.fly.dev/v1/l1/screen` 送
       `demo/return_photos/加油卡和停車卡.webp` 驗過：`assessable=true`、
       `retake_required=false`、`停車卡=false`、`加油卡=true`。
       實機用預設網址（不經 `adb reverse`）也跑通了同一張。
@@ -213,7 +213,7 @@ L0 車牌: 720x600 ocr=ABC-1234 候選=[A8C1234] → mismatch
       release**：第 5 項寫的 iOS 從來沒有在真機上跑過一行，BGRA8888 那條路徑
       也沒驗過，附一個沒人測過又裝不了的 IPA 只會讓人以為它能用
 - [x] **2026-09-08** 開了 GitHub Release `v1.0.0`（只有 Android）：
-      <https://github.com/HT-Hackathon-YTJJ/iRent-Pulse/releases/tag/v1.0.0>
+      <https://github.com/HT-Hackathon-YTJJ/iRent-iTrust/releases/tag/v1.0.0>
 - [x] **2026-09-08** Release note 寫了：裝哪一個、怎麼允許未知來源、要哪些權限、
       不需要連我們的 Wi-Fi、後端連不上會退回腳本情境，以及三個已知限制
       （沒有 iOS、debug key 簽章、Store 停機會清空）
@@ -253,7 +253,7 @@ L0 車牌: 720x600 ocr=ABC-1234 候選=[A8C1234] → mismatch
 
 ## 7. 部署後的雜項
 
-- [ ] Fly 機器閒置會停機。Demo 前先打一次 `curl https://irent-pulse-api.fly.dev/healthz`
+- [ ] Fly 機器閒置會停機。Demo 前先打一次 `curl https://irent-itrust-api.fly.dev/healthz`
       叫醒它（喚醒約 1–2 秒，但別讓評審等那一下）
 - [ ] `/v1/l1/screen` 目前沒有任何驗證，任何人拿到網址都能燒 OpenRouter 額度。
       去 OpenRouter 後台設一個支出上限；真要擋就加一個共用 header token
@@ -264,7 +264,7 @@ L0 車牌: 720x600 ocr=ABC-1234 候選=[A8C1234] → mismatch
 
 ## 已完成
 
-- [x] **2026-09-07** 後端部署到 Fly.io（`irent-pulse-api.fly.dev`）。原訂的
+- [x] **2026-09-07** 後端部署到 Fly.io（`irent-itrust-api.fly.dev`）。原訂的
       Hugging Face Spaces 走不通：HF 已改成 Docker Space 需要 PRO 訂閱，只有
       Static Space 免費
 - [x] **2026-09-07** `InspectionApi` 預設指向部署好的網址，`/healthz` 探測

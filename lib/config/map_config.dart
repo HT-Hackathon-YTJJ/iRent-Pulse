@@ -38,7 +38,7 @@ bool _iosMapsReady = false;
 bool get _iosNeedsNativeKey =>
     !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
 
-const _iosChannel = MethodChannel('irent_pulse/maps');
+const _iosChannel = MethodChannel('irent_itrust/maps');
 
 /// 有金鑰、而且該平台的初始化也完成了，才走 Google Maps。
 bool get useGoogleMaps =>
@@ -74,6 +74,6 @@ Future<void> initGoogleMaps() async {
   } on MissingPluginException {
     // 原生端還沒接這條 channel（例如 AppDelegate 被改掉了）。
     _iosMapsReady = false;
-    debugPrint('找不到 irent_pulse/maps channel，改用 OpenStreetMap 底圖。');
+    debugPrint('找不到 irent_itrust/maps channel，改用 OpenStreetMap 底圖。');
   }
 }

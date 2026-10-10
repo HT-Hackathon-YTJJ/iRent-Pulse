@@ -480,7 +480,7 @@ class _OsmBackdropState extends State<_OsmBackdrop>
           colorFilter: _googleLikeFilter,
           child: fm.TileLayer(
             urlTemplate: _OsmBackdrop.tileUrl,
-            userAgentPackageName: 'tw.irent.pulse.demo',
+            userAgentPackageName: 'tw.irent.itrust.demo',
             maxNativeZoom: 19,
             tileDisplay: const fm.TileDisplay.fadeIn(
               duration: Duration(milliseconds: 180),

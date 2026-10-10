@@ -31,7 +31,7 @@ from .models import BoardNote, L1Result, L2Result, L3Decision, SlotKind, Stage
 from .store import STORE
 
 app = FastAPI(
-    title="iRent Pulse — 車況分層檢測 API",
+    title="iRent iTrust — 車況分層檢測 API",
     version="1.0.0",
     description="L1 快篩（阻塞）／L2 影像確認／L3 決策派工。分層規格書 v2。",
 )

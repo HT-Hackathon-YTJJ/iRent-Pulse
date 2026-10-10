@@ -101,8 +101,8 @@ async def chat_json(
     headers = {
         "Authorization": f"Bearer {config.OPENROUTER_API_KEY}",
         "Content-Type": "application/json",
-        "HTTP-Referer": "https://github.com/ncchen99/iRent-Pulse",
-        "X-Title": "iRent Pulse Vehicle Condition Steward",  # headers must be ASCII
+        "HTTP-Referer": "https://github.com/HT-Hackathon-YTJJ/iRent-iTrust",
+        "X-Title": "iRent iTrust Vehicle Condition Steward",  # headers must be ASCII
     }
 
     limit = attempts or config.MAX_ATTEMPTS

@@ -4,10 +4,10 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:irent_pulse/data/return_inspection.dart';
-import 'package:irent_pulse/l0/capture_session.dart';
-import 'package:irent_pulse/services/inspection_api.dart';
-import 'package:irent_pulse/services/return_session.dart';
+import 'package:irent_itrust/data/return_inspection.dart';
+import 'package:irent_itrust/l0/capture_session.dart';
+import 'package:irent_itrust/services/inspection_api.dart';
+import 'package:irent_itrust/services/return_session.dart';
 
 /// The shape L1 actually returns, minus the fields the driver-facing screens
 /// never read.

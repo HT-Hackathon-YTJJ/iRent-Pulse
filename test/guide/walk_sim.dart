@@ -1,8 +1,8 @@
 import 'dart:math' as math;
 import 'dart:ui';
 
-import 'package:irent_pulse/guide/orbit.dart';
-import 'package:irent_pulse/guide/outline_renderer.dart';
+import 'package:irent_itrust/guide/orbit.dart';
+import 'package:irent_itrust/guide/outline_renderer.dart';
 
 /// A driver walking round the car with the phone, and what the phone's
 /// sensors make of it — for measuring the orbit tracker end to end rather

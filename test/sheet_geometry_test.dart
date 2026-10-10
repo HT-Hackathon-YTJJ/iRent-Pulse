@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:irent_pulse/data/vehicle.dart';
-import 'package:irent_pulse/screens/safe_drive_assist_screen.dart';
-import 'package:irent_pulse/screens/trip_screen.dart';
-import 'package:irent_pulse/screens/vehicle_status_screen.dart';
-import 'package:irent_pulse/widgets/dark_sheet.dart';
+import 'package:irent_itrust/data/vehicle.dart';
+import 'package:irent_itrust/screens/safe_drive_assist_screen.dart';
+import 'package:irent_itrust/screens/trip_screen.dart';
+import 'package:irent_itrust/screens/vehicle_status_screen.dart';
+import 'package:irent_itrust/widgets/dark_sheet.dart';
 
 /// Where the pull-up sheets stop, and which screens are allowed a grab handle.
 ///

@@ -29,7 +29,7 @@ class InspectionApi {
   /// demo on their phone — the failure looks exactly like success. HTTPS also
   /// keeps Android's cleartext policy and iOS ATS out of the way, which a LAN
   /// address does not.
-  static const String deployedBaseUrl = 'https://irent-pulse-api.fly.dev';
+  static const String deployedBaseUrl = 'https://irent-itrust-api.fly.dev';
 
   /// Point at a local `api/run.sh` with
   /// `flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8000`
