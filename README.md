@@ -4,7 +4,7 @@
 
 這是 **2026 和泰 AI 黑客松** 的參賽作品（團隊：HCI Mobility Lab 人機移動實驗室）。
 以 Flutter 復刻 iRent App 的主要頁面，並在其上做出提案中的改善功能，當作可以實際
-拿在手上操作的 Prototype。（專案原名 iRent Pulse，2026-10 改名。）
+拿在手上操作的 Prototype。
 
 ![從使用者旅程地圖找出四個關鍵時刻：AI 智能三審、拍照防呆、優良駕駛等級、安心上路輔助](docs/images/overview.jpg)
 
@@ -45,16 +45,11 @@ L0 手機端防呆 → L1 雲端快篩 → L2 取還車比對 → L3 人工決�
 
 ![AI 智能三審系統架構圖與 L1 快篩模型驗證數據](docs/images/architecture.jpg)
 
-> **給閱讀這個 repo 的 AI／新成員**：這不是要上線的產品，而是黑客松 Demo。真的
-> 落地時功能會搬進 iRent 自己的 App，這個 Flutter 專案不會延續——所以取捨一律以
-> 「評審看得懂、摸得到」為優先，不追求可重用性或永續架構。下面「黑客松提案」一節
-> 是初賽簡報的重點整理，想知道某段程式**為什麼**存在，先回來對照這一節。
-
 ## 下載測試版
 
 | 平台 | 怎麼裝 |
 | --- | --- |
-| iOS | 用 iPhone 開 TestFlight 公開連結 <https://testflight.apple.com/join/XzGu4D5b>，先裝 TestFlight App 再按「接受」（2026-10-10 送審，Apple 核准前連結還不能加入） |
+| iOS | 用 iPhone 開 TestFlight 公開連結 <https://testflight.apple.com/join/XzGu4D5b>，先裝 TestFlight App 再按「接受」 |
 | Android | [GitHub Releases](https://github.com/HT-Hackathon-YTJJ/iRent-iTrust/releases/latest) 下載 `arm64-v8a` 的 APK（舊手機或裝不起來再用 `universal`） |
 
 > 2.0.0 起套件名稱改成 `com.irentitrust.app`，Android 會被當成**另一個 App** 安裝。
